@@ -5,6 +5,8 @@
 .nitro
 .cache
 dist
+assets/blocks/*
+!assets/blocks/.gitkeep
 
 # Node dependencies
 node_modules
