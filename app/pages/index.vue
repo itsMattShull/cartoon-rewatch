@@ -126,11 +126,22 @@ import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
 
-const rawChannels = [toonamiData, adultSwimData, saturdayMorningData]
+const channelSlugs = ['toonami', 'adult-swim', 'saturday-morning']
+const fallbackPayloads = {
+  toonami: toonamiData,
+  'adult-swim': adultSwimData,
+  'saturday-morning': saturdayMorningData
+}
+const fallbackNames = {
+  toonami: toonamiData?.channel || 'Toonami',
+  'adult-swim': adultSwimData?.channel || 'Adult Swim',
+  'saturday-morning': saturdayMorningData?.channel || 'Saturday Morning'
+}
 
-const channels = rawChannels.map((channel, index) => {
-  const name = channel?.channel || `Channel ${index + 1}`
-  const videos = Array.isArray(channel?.videos) ? channel.videos : []
+function buildChannel(payload, fallbackName, index) {
+  const name =
+    (typeof payload?.channel === 'string' && payload.channel.trim()) || fallbackName || `Channel ${index + 1}`
+  const videos = Array.isArray(payload?.videos) ? payload.videos : []
   const normalizedVideos = videos
     .filter((video) => video && typeof video.id === 'string' && video.id.trim().length > 0)
     .map((video, videoIndex) => {
@@ -149,7 +160,13 @@ const channels = rawChannels.map((channel, index) => {
     videos: normalizedVideos,
     totalDuration
   }
-})
+}
+
+const channels = ref(
+  channelSlugs.map((slug, index) =>
+    buildChannel(fallbackPayloads[slug], fallbackNames[slug], index)
+  )
+)
 
 const activeChannelIndex = ref(0)
 const isOn = ref(true)
@@ -168,7 +185,7 @@ let syncInterval = null
 let resizeObserver = null
 const storageKey = 'crt80:lastChannel'
 
-const activeChannel = computed(() => channels[activeChannelIndex.value])
+const activeChannel = computed(() => channels.value[activeChannelIndex.value])
 
 const scheduleInfo = computed(() => {
   const channel = activeChannel.value
@@ -209,6 +226,43 @@ const guideHours = 6
 const hourWidth = 500
 const scheduleTimeZone = 'America/Chicago'
 const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone))
+
+const requestUrl = useRequestURL()
+const canonicalUrl = computed(() => requestUrl.origin + requestUrl.pathname)
+const pageTitle = 'Cartoon ReWatch — Live Cartoon Channel Player'
+const pageDescription =
+  'Stream a nostalgic, always-on cartoon channel with classic blocks from Toonami, Adult Swim, Saturday Mornings, and more.'
+
+useHead({
+  title: pageTitle,
+  htmlAttrs: { lang: 'en' },
+  meta: [
+    { name: 'description', content: pageDescription },
+    { name: 'robots', content: 'index,follow' },
+    { name: 'theme-color', content: '#1f2024' },
+    { property: 'og:title', content: pageTitle },
+    { property: 'og:description', content: pageDescription },
+    { property: 'og:type', content: 'website' },
+    { property: 'og:url', content: canonicalUrl.value },
+    { property: 'og:site_name', content: 'Cartoon ReWatch' },
+    { name: 'twitter:card', content: 'summary' },
+    { name: 'twitter:title', content: pageTitle },
+    { name: 'twitter:description', content: pageDescription }
+  ],
+  link: [{ rel: 'canonical', href: canonicalUrl.value }],
+  script: [
+    {
+      type: 'application/ld+json',
+      children: JSON.stringify({
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        name: 'Cartoon ReWatch',
+        url: canonicalUrl.value,
+        description: pageDescription
+      })
+    }
+  ]
+})
 const guideHeaderSegments = computed(() => {
   const startSeconds = getSecondsSinceMidnightInZone(guideStart.value, scheduleTimeZone)
   const minuteOfHour = Math.floor((startSeconds % 3600) / 60)
@@ -234,7 +288,7 @@ const guideHeaderSegments = computed(() => {
 const guideRows = computed(() => {
   const startSeconds = getSecondsSinceMidnightInZone(guideStart.value, scheduleTimeZone)
   const windowSeconds = guideHours * 3600
-  return channels.map((channel) => ({
+  return channels.value.map((channel) => ({
     name: channel.name,
     blocks: buildGuideBlocks(channel, startSeconds, windowSeconds)
   }))
@@ -352,12 +406,12 @@ function setChannel(index) {
 }
 
 function nextChannel() {
-  const next = (activeChannelIndex.value + 1) % channels.length
+  const next = (activeChannelIndex.value + 1) % channels.value.length
   setChannel(next)
 }
 
 function prevChannel() {
-  const next = (activeChannelIndex.value - 1 + channels.length) % channels.length
+  const next = (activeChannelIndex.value - 1 + channels.value.length) % channels.value.length
   setChannel(next)
 }
 
@@ -502,10 +556,41 @@ function syncToSchedule(force = false) {
   }, 1200)
 }
 
+async function loadActiveBlocks() {
+  if (!import.meta.client) return
+  try {
+    const activeResponse = await $fetch('/api/blocks/active')
+    const active = activeResponse?.active || {}
+    const payloads = {}
+
+    await Promise.all(
+      channelSlugs.map(async (slug) => {
+        const blockSlug = typeof active?.[slug] === 'string' ? active[slug] : ''
+        if (!blockSlug) {
+          payloads[slug] = fallbackPayloads[slug]
+          return
+        }
+        try {
+          const response = await $fetch(`/api/blocks/${blockSlug}`)
+          payloads[slug] = response?.payload || fallbackPayloads[slug]
+        } catch (error) {
+          payloads[slug] = fallbackPayloads[slug]
+        }
+      })
+    )
+
+    channels.value = channelSlugs.map((slug, index) =>
+      buildChannel(payloads[slug], fallbackNames[slug], index)
+    )
+  } catch (error) {
+    // Keep fallback channels if the request fails.
+  }
+}
+
 onMounted(async () => {
   if (typeof window !== 'undefined') {
     const saved = Number.parseInt(window.localStorage.getItem(storageKey) || '', 10)
-    if (Number.isFinite(saved) && saved >= 0 && saved < channels.length) {
+    if (Number.isFinite(saved) && saved >= 0 && saved < channels.value.length) {
       activeChannelIndex.value = saved
     }
   }
@@ -515,6 +600,7 @@ onMounted(async () => {
     now.value = new Date()
   }, 1000)
 
+  await loadActiveBlocks()
   await ensureYouTubeApi()
   if (!player) {
     createPlayer()

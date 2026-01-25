@@ -25,12 +25,17 @@ export function isAllowedUser(userId) {
   return allowed.includes(String(userId))
 }
 
-export function signSession(userId, ttlSeconds = 60 * 60 * 24 * 7) {
+export function signSession(user, ttlSeconds = 60 * 60 * 24 * 7) {
   const secret = process.env.SESSION_SECRET
   if (!secret) throw new Error('SESSION_SECRET is not set')
+  const userId = typeof user === 'object' && user !== null ? user.id : user
+  const username = typeof user === 'object' && user !== null ? user.username : null
   const payload = {
     id: String(userId),
     exp: Math.floor(Date.now() / 1000) + ttlSeconds
+  }
+  if (username) {
+    payload.username = String(username)
   }
   const payloadB64 = base64UrlEncode(JSON.stringify(payload))
   const signature = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url')

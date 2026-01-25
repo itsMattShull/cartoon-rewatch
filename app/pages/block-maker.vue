@@ -2,41 +2,25 @@
   <div class="maker-page">
     <header class="maker-header">
       <div>
-        <h1>Channel Maker</h1>
-        <p>Pick a channel, edit video IDs, and export updated JSON.</p>
+        <h1>Block Maker</h1>
+        <p>Create or update blocks, then save them to JSON files.</p>
       </div>
       <div class="maker-actions">
         <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
           Sign in with Discord
         </a>
-        <div v-else class="auth-meta">
-          <span class="auth-label">Signed in</span>
-          <a class="secondary" href="/api/auth/logout">Sign out</a>
-        </div>
-        <button v-if="isAuthorized" class="secondary" type="button" @click="resetChannelToFile">
-          Pull Current
-        </button>
-        <button v-if="isAuthorized" class="primary" type="button" @click="saveChannel">
-          Save Channel
+        <a class="secondary" href="/blocks">Back to Blocks</a>
+        <button v-if="isAuthorized" class="primary" type="button" @click="saveBlock">
+          Save Block
         </button>
       </div>
     </header>
 
     <section v-if="isAuthorized" class="maker-controls">
       <label class="field">
-        <span>Channel</span>
-        <select v-model.number="selectedChannelIndex">
-          <option v-for="(channel, index) in editableChannels" :key="channel.name" :value="index">
-            {{ channel.name }}
-          </option>
-        </select>
+        <span>Block Name</span>
+        <input v-model.trim="blockName" type="text" placeholder="Saturday Morning Mix" />
       </label>
-      <button class="primary add-row" type="button" @click="addRow">
-        + Add Video
-      </button>
-      <div class="helper">
-        Paste this export into <span class="code">assets/channels/{{ selectedChannelSlug }}.json</span>.
-      </div>
     </section>
 
     <section v-if="isAuthorized" class="maker-table">
@@ -51,7 +35,7 @@
         <span>Status</span>
         <span></span>
       </div>
-      <template v-for="(row, index) in selectedChannel?.videos ?? []" :key="row._uid">
+      <template v-for="(row, index) in rows" :key="row._uid">
         <div
           class="table-row"
           :class="{
@@ -83,25 +67,10 @@
             @blur="updateVideoInfo(row, index)"
           />
           <div class="cell-preview">
-            <img
-              v-if="getPreviewUrl(row.id)"
-              :src="getPreviewUrl(row.id)"
-              alt=""
-              loading="lazy"
-            />
+            <img v-if="getPreviewUrl(row.id)" :src="getPreviewUrl(row.id)" alt="" loading="lazy" />
           </div>
-          <input
-            v-model.trim="row.title"
-            type="text"
-            class="cell-input"
-            placeholder="Video title"
-          />
-          <input
-            v-model.number="row.durationSeconds"
-            type="number"
-            min="0"
-            class="cell-input"
-          />
+          <input v-model.trim="row.title" type="text" class="cell-input" placeholder="Video title" />
+          <input v-model.number="row.durationSeconds" type="number" min="0" class="cell-input" />
           <span class="cell-status">{{ getFetchStatus(index) }}</span>
           <button class="delete-row" type="button" @click="removeRow(index)">Delete</button>
         </div>
@@ -119,182 +88,158 @@
       </template>
     </section>
 
-    <section v-if="isAuthorized" class="export">
-      <label>Export JSON</label>
-      <textarea readonly :value="exportJson"></textarea>
-      <p class="note">
-        Titles and durations are fetched server-side. If a video is restricted, fill in the fields manually.
-      </p>
+    <section v-if="isAuthorized" class="maker-cards">
+      <template v-for="(row, index) in rows" :key="row._uid">
+        <article
+          class="video-card"
+          :class="{
+            dragging: row._uid === dragUid,
+            'drag-target': index === hoverIndex && row._uid !== dragUid
+          }"
+          @dragover.prevent
+          @dragenter.prevent="onDragEnter(index)"
+          @drop="onDrop()"
+        >
+          <div class="card-head">
+            <button
+              class="drag-handle"
+              type="button"
+              draggable="true"
+              aria-label="Drag to reorder"
+              @dragstart="onDragStart(row, $event)"
+              @dragend="onDragEnd"
+            >
+              ⠿
+            </button>
+            <div class="card-meta">
+              <span class="card-index">#{{ index + 1 }}</span>
+              <span class="card-start">{{ formatClockOffset(getStartSeconds(index)) }}</span>
+            </div>
+            <button class="delete-row" type="button" @click="removeRow(index)">Delete</button>
+          </div>
+          <div class="card-body">
+            <label class="card-field">
+              <span>Video ID</span>
+              <input
+                v-model.trim="row.id"
+                type="text"
+                class="cell-input"
+                placeholder="YouTube ID or URL"
+                @input="queueUpdate(row, index)"
+                @blur="updateVideoInfo(row, index)"
+              />
+            </label>
+            <div class="cell-preview">
+              <img v-if="getPreviewUrl(row.id)" :src="getPreviewUrl(row.id)" alt="" loading="lazy" />
+            </div>
+            <label class="card-field">
+              <span>Title</span>
+              <input v-model.trim="row.title" type="text" class="cell-input" placeholder="Video title" />
+            </label>
+            <label class="card-field">
+              <span>Length (sec)</span>
+              <input v-model.number="row.durationSeconds" type="number" min="0" class="cell-input" />
+            </label>
+          </div>
+          <div class="card-status">Status: {{ getFetchStatus(index) || 'Idle' }}</div>
+        </article>
+        <div class="insert-line">
+          <button
+            class="insert-button"
+            type="button"
+            aria-label="Add video here"
+            @click="insertRow(index + 1)"
+          >
+            +
+          </button>
+          <span class="insert-rule"></span>
+        </div>
+      </template>
     </section>
+
     <section v-else class="locked">
       <h2>Sign in required</h2>
-      <p>Only approved Discord accounts can access the Channel Maker.</p>
+      <p>Only approved Discord accounts can access the Block Maker.</p>
       <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
     </section>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue'
-import toonamiData from '../assets/channels/toonami.json'
-import adultSwimData from '../assets/channels/adult-swim.json'
-import saturdayMorningData from '../assets/channels/saturday-morning.json'
+import { computed, ref, watch } from 'vue'
 
-const selectedChannelIndex = ref(0)
-const fetchStatus = ref({})
-let videoUidCounter = 0
-const dragUid = ref(null)
-const hoverIndex = ref(null)
-const updateTimers = ref({})
-const storagePrefix = 'crt80:channel:'
-let isLoadingFromStorage = false
+const route = useRoute()
+const router = useRouter()
+
 const { data: authData } = await useFetch('/api/auth/me')
 const isAuthorized = computed(() => authData.value?.authenticated)
 
-function makeSlug(name, index) {
-  return (name || `channel-${index + 1}`).toLowerCase().replace(/\s+/g, '-')
-}
+const blockName = ref('')
+const blockSlug = ref('')
+const rows = ref([])
+const fetchStatus = ref({})
+const dragUid = ref(null)
+const hoverIndex = ref(null)
+const updateTimers = ref({})
+let videoUidCounter = 0
 
-function toPlainChannel(channel, index) {
-  const name = channel?.channel || channel?.name || `Channel ${index + 1}`
-  const slug = makeSlug(name, index)
-  const videos = Array.isArray(channel?.videos) ? channel.videos : []
+function toRow(video) {
   return {
-    name,
-    slug,
-    videos: videos.map((video) => ({
-      id: typeof video.id === 'string' ? video.id : '',
-      title: typeof video.title === 'string' ? video.title : '',
-      durationSeconds: Number(video.durationSeconds) || 0
-    }))
+    id: typeof video?.id === 'string' ? video.id : '',
+    title: typeof video?.title === 'string' ? video.title : '',
+    durationSeconds: Number(video?.durationSeconds) || 0,
+    _uid: `vid-${videoUidCounter++}`
   }
 }
 
-function toEditableChannel(plainChannel, index) {
+function ensureRows() {
+  if (!rows.value.length) {
+    rows.value.push({ id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
+  }
+}
+
+function loadFromPayload(payload) {
+  blockName.value = typeof payload?.channel === 'string' ? payload.channel : ''
+  const videos = Array.isArray(payload?.videos) ? payload.videos : []
+  rows.value = videos.map((video) => toRow(video))
+  fetchStatus.value = {}
+  ensureRows()
+}
+
+function buildPayload() {
   return {
-    name: plainChannel.name,
-    slug: plainChannel.slug || makeSlug(plainChannel.name, index),
-    videos: plainChannel.videos.map((video) => ({
+    channel: blockName.value || 'Block',
+    note: 'Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.',
+    videos: rows.value.map((video) => ({
       id: video.id,
       title: video.title,
-      durationSeconds: Number(video.durationSeconds) || 0,
-      _uid: `vid-${index}-${videoUidCounter++}`
+      durationSeconds: Number(video.durationSeconds) || 0
     }))
   }
 }
 
 function addRow() {
   if (!isAuthorized.value) return
-  const rows = selectedChannel.value?.videos
-  if (!rows) return
-  rows.push({
-    id: '',
-    title: '',
-    durationSeconds: 0,
-    _uid: `vid-new-${videoUidCounter++}`
-  })
+  rows.value.push({ id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
 }
 
 function insertRow(index) {
   if (!isAuthorized.value) return
-  const rows = selectedChannel.value?.videos
-  if (!rows) return
-  rows.splice(index, 0, {
-    id: '',
-    title: '',
-    durationSeconds: 0,
-    _uid: `vid-new-${videoUidCounter++}`
-  })
+  rows.value.splice(index, 0, { id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
 }
 
 function removeRow(index) {
   if (!isAuthorized.value) return
-  const rows = selectedChannel.value?.videos
-  if (!rows || rows.length <= 1) return
-  rows.splice(index, 1)
-}
-
-const fileChannels = [toonamiData, adultSwimData, saturdayMorningData].map((channel, index) =>
-  toPlainChannel(channel, index)
-)
-
-const editableChannels = ref(fileChannels.map((channel, index) => toEditableChannel(channel, index)))
-
-const selectedChannel = computed(() => editableChannels.value[selectedChannelIndex.value])
-const selectedChannelSlug = computed(() => selectedChannel.value?.slug || 'channel')
-
-const exportJson = computed(() => {
-  const channel = selectedChannel.value
-  if (!channel) return ''
-  const payload = {
-    channel: channel.name,
-    note: 'Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.',
-    videos: channel.videos.map((video) => ({
-      id: video.id,
-      title: video.title,
-      durationSeconds: Number(video.durationSeconds) || 0
-    }))
-  }
-  return JSON.stringify(payload, null, 2)
-})
-
-function getStorageKey(slug) {
-  return `${storagePrefix}${slug}`
-}
-
-function saveChannelToStorage(channel) {
-  if (!import.meta.client || !channel || isLoadingFromStorage || !isAuthorized.value) return
-  const payload = {
-    channel: channel.name,
-    note: 'Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.',
-    videos: channel.videos.map((video) => ({
-      id: video.id,
-      title: video.title,
-      durationSeconds: Number(video.durationSeconds) || 0
-    }))
-  }
-  window.localStorage.setItem(getStorageKey(channel.slug), JSON.stringify(payload))
-}
-
-function loadChannelFromStorage(index) {
-  if (!import.meta.client) return
-  const fallback = fileChannels[index]
-  if (!fallback) return
-  const key = getStorageKey(fallback.slug)
-  const stored = window.localStorage.getItem(key)
-  if (!stored) {
-    editableChannels.value.splice(index, 1, toEditableChannel(fallback, index))
-    return
-  }
-  try {
-    const parsed = JSON.parse(stored)
-    const plain = toPlainChannel(parsed, index)
-    isLoadingFromStorage = true
-    editableChannels.value.splice(index, 1, toEditableChannel(plain, index))
-  } catch (error) {
-    editableChannels.value.splice(index, 1, toEditableChannel(fallback, index))
-  } finally {
-    isLoadingFromStorage = false
-  }
-}
-
-function resetChannelToFile() {
-  if (!isAuthorized.value) return
-  const index = selectedChannelIndex.value
-  const fallback = fileChannels[index]
-  if (!fallback) return
-  editableChannels.value.splice(index, 1, toEditableChannel(fallback, index))
-  if (import.meta.client) {
-    window.localStorage.setItem(getStorageKey(fallback.slug), JSON.stringify(fallback))
-  }
+  if (rows.value.length <= 1) return
+  rows.value.splice(index, 1)
 }
 
 function getFetchStatus(index) {
-  return fetchStatus.value[`${selectedChannelIndex.value}-${index}`] || ''
+  return fetchStatus.value[index] || ''
 }
 
 function setFetchStatus(index, status) {
-  fetchStatus.value[`${selectedChannelIndex.value}-${index}`] = status
+  fetchStatus.value[index] = status
 }
 
 function formatClockOffset(seconds) {
@@ -306,10 +251,9 @@ function formatClockOffset(seconds) {
 }
 
 function getStartSeconds(index) {
-  const rows = selectedChannel.value?.videos ?? []
   let cursor = 0
   for (let i = 0; i < index; i += 1) {
-    cursor += Number(rows[i]?.durationSeconds) || 0
+    cursor += Number(rows.value[i]?.durationSeconds) || 0
   }
   return cursor
 }
@@ -385,24 +329,6 @@ async function updateVideoInfo(row, index) {
   }
 }
 
-async function saveChannel() {
-  if (!import.meta.client || !isAuthorized.value) return
-  const channel = selectedChannel.value
-  if (!channel) return
-  try {
-    await $fetch('/api/channel/save', {
-      method: 'POST',
-      body: {
-        slug: channel.slug,
-        payload: JSON.parse(exportJson.value)
-      }
-    })
-    alert('Channel saved to JSON file.')
-  } catch (error) {
-    alert('Save failed. Check server logs for details.')
-  }
-}
-
 function queueUpdate(row, index) {
   const trimmed = row.id?.trim() || ''
   if (trimmed.includes('youtube.com') || trimmed.includes('youtu.be') || trimmed.startsWith('http')) {
@@ -411,11 +337,11 @@ function queueUpdate(row, index) {
       row.id = normalized
     }
   }
-  const key = `${selectedChannelIndex.value}-${index}`
-  if (updateTimers.value[key]) {
-    window.clearTimeout(updateTimers.value[key])
+  if (!import.meta.client) return
+  if (updateTimers.value[index]) {
+    window.clearTimeout(updateTimers.value[index])
   }
-  updateTimers.value[key] = window.setTimeout(() => {
+  updateTimers.value[index] = window.setTimeout(() => {
     updateVideoInfo(row, index)
   }, 600)
 }
@@ -431,12 +357,10 @@ function onDragStart(row, event) {
 
 function onDragEnter(targetIndex) {
   if (dragUid.value === null) return
-  const rows = selectedChannel.value?.videos
-  if (!rows) return
-  const fromIndex = rows.findIndex((row) => row._uid === dragUid.value)
+  const fromIndex = rows.value.findIndex((row) => row._uid === dragUid.value)
   if (fromIndex < 0 || fromIndex === targetIndex) return
-  const [moved] = rows.splice(fromIndex, 1)
-  rows.splice(targetIndex, 0, moved)
+  const [moved] = rows.value.splice(fromIndex, 1)
+  rows.value.splice(targetIndex, 0, moved)
   hoverIndex.value = targetIndex
 }
 
@@ -450,22 +374,112 @@ function onDrop() {
   hoverIndex.value = null
 }
 
-watch(selectedChannelIndex, (index) => {
-  loadChannelFromStorage(index)
-})
+async function loadBlock(slug) {
+  if (!isAuthorized.value) return
+  if (!import.meta.client) return
+  const cleanSlug = typeof slug === 'string' ? slug : ''
+  if (!cleanSlug) {
+    blockSlug.value = ''
+    blockName.value = ''
+    rows.value = []
+    fetchStatus.value = {}
+    ensureRows()
+    return
+  }
+  try {
+    const response = await $fetch(`/api/blocks/${cleanSlug}`)
+    blockSlug.value = response?.slug || cleanSlug
+    loadFromPayload(response?.payload || {})
+  } catch (error) {
+    blockSlug.value = cleanSlug
+    rows.value = []
+    fetchStatus.value = {}
+    ensureRows()
+    alert('Failed to load block. Check server logs for details.')
+  }
+}
+
+async function saveBlock() {
+  if (!import.meta.client || !isAuthorized.value) return
+  const name = blockName.value.trim()
+  if (!name) {
+    alert('Please enter a block name before saving.')
+    return
+  }
+  const currentSlug =
+    blockSlug.value || (typeof route.query.block === 'string' ? route.query.block : '')
+  const normalizedName = name.toLowerCase()
+  try {
+    const blocksResponse = await $fetch('/api/blocks')
+    const blocksList = Array.isArray(blocksResponse?.blocks) ? blocksResponse.blocks : []
+    const conflict = blocksList.find((block) => {
+      const blockNameValue = String(block?.name || '').trim().toLowerCase()
+      if (!blockNameValue) return false
+      if (currentSlug && block?.slug === currentSlug) return false
+      return blockNameValue === normalizedName
+    })
+    if (conflict) {
+      alert('Save failed: block name already exists. Please choose a unique name.')
+      return
+    }
+  } catch (error) {
+    const statusMessage =
+      error?.data?.statusMessage ||
+      error?.response?._data?.statusMessage ||
+      error?.message ||
+      'Unable to check block names.'
+    alert(`Save failed: ${statusMessage}`)
+    return
+  }
+  try {
+    const response = await $fetch('/api/blocks/save', {
+      method: 'POST',
+      body: {
+        slug: blockSlug.value || null,
+        name,
+        payload: buildPayload()
+      }
+    })
+    if (response?.slug) {
+      blockSlug.value = response.slug
+    }
+    router.push('/blocks')
+  } catch (error) {
+    const statusMessage =
+      error?.data?.statusMessage ||
+      error?.response?._data?.statusMessage ||
+      error?.message ||
+      ''
+    if (String(statusMessage).toLowerCase().includes('block name already exists')) {
+      alert('Save failed: block name already exists. Please choose a unique name.')
+      return
+    }
+    alert(`Save failed: ${statusMessage || 'Unknown error'}`)
+  }
+}
 
 watch(
-  selectedChannel,
-  (channel) => {
-    saveChannelToStorage(channel)
+  isAuthorized,
+  (value) => {
+    if (!value) return
+    const slug = typeof route.query.block === 'string' ? route.query.block : ''
+    if (slug) {
+      loadBlock(slug)
+    } else {
+      ensureRows()
+    }
   },
-  { deep: true }
+  { immediate: true }
 )
 
-onMounted(() => {
-  loadChannelFromStorage(selectedChannelIndex.value)
-})
-
+watch(
+  () => route.query.block,
+  (value) => {
+    if (!isAuthorized.value) return
+    const slug = typeof value === 'string' ? value : ''
+    loadBlock(slug)
+  }
+)
 </script>
 
 <style scoped>
@@ -509,7 +523,7 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .field {
@@ -536,6 +550,10 @@ onMounted(() => {
   background: #3a2c1c;
   color: #f7e4b4;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .secondary {
@@ -545,19 +563,10 @@ onMounted(() => {
   background: #1a1b20;
   color: #f7e4b4;
   cursor: pointer;
-}
-
-.auth-meta {
-  display: flex;
+  text-decoration: none;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: #cab688;
-}
-
-.auth-label {
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  justify-content: center;
 }
 
 .maker-controls {
@@ -617,6 +626,85 @@ onMounted(() => {
   outline-offset: 2px;
 }
 
+.cell-status {
+  font-size: 12px;
+  color: #f9d98f;
+}
+
+.maker-cards {
+  display: none;
+  gap: 16px;
+}
+
+.video-card {
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 14px;
+  border: 1px solid #5e4a2f;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.video-card.dragging {
+  opacity: 0.5;
+}
+
+.video-card.drag-target {
+  outline: 2px dashed rgba(249, 217, 143, 0.6);
+  outline-offset: 2px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #cab688;
+}
+
+.card-index {
+  font-size: 13px;
+  color: #f7e4b4;
+}
+
+.card-start {
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+}
+
+.card-body {
+  display: grid;
+  grid-template-columns: 1.6fr 110px 1.6fr 160px;
+  gap: 12px;
+  align-items: center;
+}
+
+.card-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #cab688;
+}
+
+.card-field span {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.card-status {
+  font-size: 12px;
+  color: #f9d98f;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
 .drag-handle {
   width: 32px;
   height: 32px;
@@ -655,11 +743,6 @@ onMounted(() => {
   background: #141418;
   color: #f7e4b4;
   font-family: 'Orbitron', sans-serif;
-}
-
-.cell-status {
-  font-size: 12px;
-  color: #f9d98f;
 }
 
 .add-row {
@@ -704,29 +787,6 @@ onMounted(() => {
   background: rgba(249, 217, 143, 0.7);
 }
 
-.export {
-  margin-top: 18px;
-  display: grid;
-  gap: 8px;
-}
-
-.export textarea {
-  width: 100%;
-  min-height: 220px;
-  border-radius: 12px;
-  border: 1px solid #5e4a2f;
-  background: #141418;
-  color: #f7e4b4;
-  padding: 12px;
-  font-family: 'VT323', monospace;
-  font-size: 14px;
-}
-
-.note {
-  font-size: 12px;
-  color: #cab688;
-}
-
 .locked {
   margin-top: 40px;
   padding: 24px;
@@ -750,9 +810,16 @@ onMounted(() => {
     padding: 16px;
   }
 
-  .table-head,
-  .table-row {
-    grid-template-columns: 32px 36px 70px 1fr 80px 1fr 90px 80px 80px;
+  .maker-table {
+    display: none;
+  }
+
+  .maker-cards {
+    display: grid;
+  }
+
+  .card-body {
+    grid-template-columns: 1fr;
   }
 }
 </style>

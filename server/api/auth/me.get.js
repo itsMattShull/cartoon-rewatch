@@ -8,6 +8,6 @@ export default defineEventHandler((event) => {
   }
   return {
     authenticated: true,
-    user: { id: session.id }
+    user: { id: session.id, username: session.username }
   }
 })

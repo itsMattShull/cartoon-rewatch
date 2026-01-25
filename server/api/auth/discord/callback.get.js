@@ -54,7 +54,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 403, statusMessage: 'Not authorized' })
   }
 
-  const sessionToken = signSession(user.id)
+  const discriminator = user.discriminator && user.discriminator !== '0' ? `#${user.discriminator}` : ''
+  const username = user.username ? `${user.username}${discriminator}` : user.id
+  const sessionToken = signSession({ id: user.id, username })
   setCookie(event, getSessionCookieName(), sessionToken, {
     httpOnly: true,
     sameSite: 'lax',
@@ -71,5 +73,5 @@ export default defineEventHandler(async (event) => {
     maxAge: 0
   })
 
-  return sendRedirect(event, '/channel-maker')
+  return sendRedirect(event, '/blocks')
 })
