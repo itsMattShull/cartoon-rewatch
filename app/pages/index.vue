@@ -77,6 +77,28 @@
             </button>
           </div>
 
+          <div class="volume-control">
+            <div class="volume-header">
+              <span class="volume-label">Volume</span>
+              <span class="volume-value">{{ volumeDisplay }}</span>
+            </div>
+            <input
+              class="volume-slider"
+              type="range"
+              min="0"
+              :max="maxVolumePercent"
+              step="1"
+              v-model.number="volumePercent"
+              :disabled="!playerReady || !isOn"
+              @input="handleVolumeInput"
+            />
+            <div class="volume-scale">
+              <span>0%</span>
+              <span>50%</span>
+              <span>100%</span>
+            </div>
+          </div>
+
           <div class="guide">
             <div class="guide-left">
               <div class="guide-left-header">Guide</div>
@@ -126,13 +148,12 @@ import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
 
-const channelSlugs = ['toonami', 'adult-swim', 'saturday-morning']
-const fallbackPayloads = {
+const defaultChannelPayloads = {
   toonami: toonamiData,
   'adult-swim': adultSwimData,
   'saturday-morning': saturdayMorningData
 }
-const fallbackNames = {
+const defaultChannelNames = {
   toonami: toonamiData?.channel || 'Toonami',
   'adult-swim': adultSwimData?.channel || 'Adult Swim',
   'saturday-morning': saturdayMorningData?.channel || 'Saturday Morning'
@@ -162,15 +183,13 @@ function buildChannel(payload, fallbackName, index) {
   }
 }
 
-const channels = ref(
-  channelSlugs.map((slug, index) =>
-    buildChannel(fallbackPayloads[slug], fallbackNames[slug], index)
-  )
-)
+const channels = ref([])
 
 const activeChannelIndex = ref(0)
 const isOn = ref(true)
 const isMuted = ref(false)
+const volumePercent = ref(100)
+const maxVolumePercent = 100
 const needsUserAction = ref(false)
 const playerReady = ref(false)
 const currentVideoId = ref('')
@@ -220,8 +239,12 @@ const formattedOffset = computed(() => formatTime(scheduleInfo.value?.offsetSeco
 const formattedDuration = computed(() =>
   formatTime(scheduleInfo.value?.video?.durationSeconds ?? 0)
 )
-const displayChannelNumber = computed(() => String(activeChannelIndex.value + 1).padStart(2, '0'))
+const displayChannelNumber = computed(() => {
+  if (!channels.value.length) return '--'
+  return String(activeChannelIndex.value + 1).padStart(2, '0')
+})
 const formattedClock = computed(() => formatClock(now.value))
+const volumeDisplay = computed(() => `${Math.round(volumePercent.value)}%`)
 const guideHours = 6
 const hourWidth = 500
 const scheduleTimeZone = 'America/Chicago'
@@ -398,6 +421,7 @@ function formatLocalTimeFromGuide(offsetSeconds) {
 }
 
 function setChannel(index) {
+  if (!channels.value.length) return
   activeChannelIndex.value = index
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(storageKey, String(index))
@@ -406,11 +430,13 @@ function setChannel(index) {
 }
 
 function nextChannel() {
+  if (!channels.value.length) return
   const next = (activeChannelIndex.value + 1) % channels.value.length
   setChannel(next)
 }
 
 function prevChannel() {
+  if (!channels.value.length) return
   const next = (activeChannelIndex.value - 1 + channels.value.length) % channels.value.length
   setChannel(next)
 }
@@ -426,6 +452,32 @@ function togglePower() {
   }
 }
 
+function applyVolume({ forceUnmute = false } = {}) {
+  if (!playerReady.value || !player || typeof player.setVolume !== 'function') return
+  const targetVolume = Math.max(0, Math.min(100, Math.round(volumePercent.value)))
+  player.setVolume(targetVolume)
+
+  if (!forceUnmute) return
+
+  needsUserAction.value = false
+  if (targetVolume === 0) {
+    if (!isMuted.value) {
+      isMuted.value = true
+      player.mute()
+    }
+    return
+  }
+
+  if (isMuted.value) {
+    isMuted.value = false
+    player.unMute()
+  }
+}
+
+function handleVolumeInput() {
+  applyVolume({ forceUnmute: true })
+}
+
 function toggleMute() {
   isMuted.value = !isMuted.value
   if (!playerReady.value || !player) return
@@ -435,14 +487,14 @@ function toggleMute() {
   } else {
     player.unMute()
     needsUserAction.value = false
+    applyVolume()
   }
 }
 
 function enableAudio() {
   if (!playerReady.value || !player) return
-  player.unMute()
+  applyVolume({ forceUnmute: true })
   player.playVideo()
-  needsUserAction.value = false
 }
 
 function ensureYouTubeApi() {
@@ -487,6 +539,7 @@ function createPlayer() {
         playerReady.value = true
         syncPlayerSize()
         syncToSchedule(true)
+        applyVolume()
       },
       onStateChange: (event) => {
         if (event.data === window.YT.PlayerState.PLAYING) {
@@ -522,7 +575,7 @@ function injectSupportButton() {
 }
 
 function syncToSchedule(force = false) {
-  if (!playerReady.value || !player || !isOn.value) return
+  if (!playerReady.value || !player || !isOn.value || !channels.value.length) return
   const info = scheduleInfo.value
   if (!info || !info.video) return
 
@@ -546,6 +599,7 @@ function syncToSchedule(force = false) {
     } else {
       player.unMute()
     }
+    applyVolume()
   }
 
   setTimeout(() => {
@@ -559,31 +613,44 @@ function syncToSchedule(force = false) {
 async function loadActiveBlocks() {
   if (!import.meta.client) return
   try {
-    const activeResponse = await $fetch('/api/blocks/active')
+    const [channelsResponse, activeResponse] = await Promise.all([
+      $fetch('/api/channels'),
+      $fetch('/api/blocks/active')
+    ])
+    const list = Array.isArray(channelsResponse?.channels) ? channelsResponse.channels : []
     const active = activeResponse?.active || {}
     const payloads = {}
 
     await Promise.all(
-      channelSlugs.map(async (slug) => {
+      list.map(async (channel) => {
+        const slug = channel.slug
         const blockSlug = typeof active?.[slug] === 'string' ? active[slug] : ''
-        if (!blockSlug) {
-          payloads[slug] = fallbackPayloads[slug]
-          return
-        }
+        if (!blockSlug) return
         try {
           const response = await $fetch(`/api/blocks/${blockSlug}`)
-          payloads[slug] = response?.payload || fallbackPayloads[slug]
+          payloads[slug] = response?.payload || null
         } catch (error) {
-          payloads[slug] = fallbackPayloads[slug]
+          payloads[slug] = null
         }
       })
     )
 
-    channels.value = channelSlugs.map((slug, index) =>
-      buildChannel(payloads[slug], fallbackNames[slug], index)
-    )
+    const activeChannels = list.filter((channel) => {
+      const blockSlug = typeof active?.[channel.slug] === 'string' ? active[channel.slug] : ''
+      return Boolean(blockSlug)
+    })
+
+    channels.value = activeChannels.map((channel, index) => {
+      const fallbackName = channel.name || defaultChannelNames[channel.slug] || channel.slug
+      const payload = payloads[channel.slug] || defaultChannelPayloads[channel.slug]
+      return buildChannel(payload, fallbackName, index)
+    })
+
+    if (activeChannelIndex.value >= channels.value.length) {
+      activeChannelIndex.value = 0
+    }
   } catch (error) {
-    // Keep fallback channels if the request fails.
+    channels.value = []
   }
 }
 
@@ -933,6 +1000,76 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.volume-control {
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(181, 138, 86, 0.45);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.volume-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-size: 11px;
+  color: #cbb78f;
+  margin-bottom: 10px;
+}
+
+.volume-value {
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: #f3e0b8;
+  text-transform: none;
+  letter-spacing: 1px;
+}
+
+.volume-slider {
+  width: 100%;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7a5630, #f9d98f 55%, #f9b65a);
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+
+.volume-slider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f7e4b4;
+  border: 2px solid #3a2c1c;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f7e4b4;
+  border: 2px solid #3a2c1c;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.volume-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #bfa77e;
+  letter-spacing: 1px;
 }
 
 .dial,

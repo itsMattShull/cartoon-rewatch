@@ -15,8 +15,30 @@
 
     <section v-if="isAuthorized" class="channels-section">
       <div class="section-header">
-        <h2>Channel Blocks</h2>
+        <h2>Channels</h2>
         <span class="status">{{ isLoading ? 'Loading...' : `${channels.length} channels` }}</span>
+      </div>
+      <div class="channels-toolbar">
+        <label class="field">
+          <span>New channel name</span>
+          <input
+            v-model="newChannelName"
+            type="text"
+            maxlength="16"
+            placeholder="Up to 16 characters"
+          />
+        </label>
+        <div class="channel-actions">
+          <span class="status">{{ newChannelName.length }}/16</span>
+          <button
+            class="primary"
+            type="button"
+            :disabled="isCreatingChannel || !canCreateChannel"
+            @click="createChannel"
+          >
+            {{ isCreatingChannel ? 'Creating...' : 'Create Channel' }}
+          </button>
+        </div>
       </div>
       <div class="channels-grid">
         <article v-for="channel in channels" :key="channel.slug" class="channel-card">
@@ -44,6 +66,11 @@
                 </option>
               </select>
             </label>
+            <div class="channel-actions">
+              <button class="danger" type="button" @click="confirmDeleteChannel(channel)">
+                Delete Channel
+              </button>
+            </div>
           </div>
         </article>
       </div>
@@ -130,18 +157,10 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import toonamiData from '../assets/channels/toonami.json'
-import adultSwimData from '../assets/channels/adult-swim.json'
-import saturdayMorningData from '../assets/channels/saturday-morning.json'
-
 const { data: authData } = await useFetch('/api/auth/me')
 const isAuthorized = computed(() => authData.value?.authenticated)
 
-const channels = [
-  { slug: 'toonami', name: toonamiData?.channel || 'Toonami' },
-  { slug: 'adult-swim', name: adultSwimData?.channel || 'Adult Swim' },
-  { slug: 'saturday-morning', name: saturdayMorningData?.channel || 'Saturday Morning' }
-]
+const channels = ref([])
 
 const blocks = ref([])
 const activeBlocks = ref({})
@@ -149,9 +168,16 @@ const selectedBlocks = ref({})
 const isLoading = ref(false)
 const currentPage = ref(1)
 const pageSize = 50
+const newChannelName = ref('')
+const isCreatingChannel = ref(false)
+const channelNameLimit = 16
+const canCreateChannel = computed(() => {
+  const name = newChannelName.value.trim()
+  return name.length > 0 && name.length <= channelNameLimit
+})
 
 function getBlockName(slug) {
-  if (!slug) return 'None'
+  if (!slug) return 'No active block'
   const found = blocks.value.find((block) => block.slug === slug)
   return found?.name || slug
 }
@@ -191,10 +217,12 @@ async function refreshAll() {
   if (!import.meta.client) return
   isLoading.value = true
   try {
-    const [blocksResponse, activeResponse] = await Promise.all([
+    const [channelsResponse, blocksResponse, activeResponse] = await Promise.all([
+      $fetch('/api/channels'),
       $fetch('/api/blocks'),
       $fetch('/api/blocks/active')
     ])
+    channels.value = Array.isArray(channelsResponse?.channels) ? channelsResponse.channels : []
     blocks.value = Array.isArray(blocksResponse?.blocks) ? blocksResponse.blocks : []
     activeBlocks.value = activeResponse?.active || {}
     selectedBlocks.value = { ...activeBlocks.value }
@@ -205,6 +233,39 @@ async function refreshAll() {
     alert('Failed to load blocks. Check server logs for details.')
   } finally {
     isLoading.value = false
+  }
+}
+
+async function createChannel() {
+  if (!isAuthorized.value || !canCreateChannel.value) return
+  isCreatingChannel.value = true
+  try {
+    await $fetch('/api/channels/create', {
+      method: 'POST',
+      body: { name: newChannelName.value.trim() }
+    })
+    newChannelName.value = ''
+    await refreshAll()
+  } catch (error) {
+    alert('Failed to create channel. Check server logs for details.')
+  } finally {
+    isCreatingChannel.value = false
+  }
+}
+
+async function confirmDeleteChannel(channel) {
+  if (!isAuthorized.value) return
+  const name = channel?.name || channel?.slug || 'this channel'
+  const ok = window.confirm(`Delete \"${name}\"? This cannot be undone.`)
+  if (!ok) return
+  try {
+    await $fetch('/api/channels/delete', {
+      method: 'POST',
+      body: { slug: channel.slug }
+    })
+    await refreshAll()
+  } catch (error) {
+    alert('Failed to delete channel. Check server logs for details.')
   }
 }
 
@@ -348,6 +409,24 @@ watch(
   gap: 16px;
 }
 
+.channels-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.channels-toolbar .field {
+  min-width: min(320px, 100%);
+}
+
+.channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .channel-card {
   background: rgba(0, 0, 0, 0.35);
   border-radius: 14px;
@@ -407,6 +486,15 @@ watch(
 }
 
 .field select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #7c6845;
+  background: #1a1b20;
+  color: #f7e4b4;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.field input {
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid #7c6845;

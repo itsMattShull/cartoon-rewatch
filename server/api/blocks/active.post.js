@@ -2,9 +2,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
 import { getSessionFromEvent } from '../../utils/auth'
+import { getChannels } from '../../utils/channels'
 
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
-const CHANNEL_SLUGS = ['toonami', 'adult-swim', 'saturday-morning']
 
 function normalizeSlug(input) {
   return String(input || '')
@@ -29,7 +29,9 @@ export default defineEventHandler(async (event) => {
 
   const body = await readBody(event)
   const channelSlug = normalizeSlug(body?.channelSlug)
-  if (!CHANNEL_SLUGS.includes(channelSlug)) {
+  const { channels } = await getChannels({ includeDefaults: true })
+  const isKnownChannel = channels.some((channel) => channel.slug === channelSlug)
+  if (!isKnownChannel) {
     throw createError({ statusCode: 400, statusMessage: 'Unknown channel' })
   }
 

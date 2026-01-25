@@ -2,11 +2,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
 import { getSessionFromEvent } from '../../utils/auth'
+import { getChannels } from '../../utils/channels'
 
 const BLOCKS_DIR = 'assets/blocks'
 const INDEX_FILE = 'assets/blocks/blocks-index.json'
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
-const CHANNEL_SLUGS = ['toonami', 'adult-swim', 'saturday-morning']
 
 function normalizeSlug(input) {
   return String(input || '')
@@ -67,10 +67,11 @@ export default defineEventHandler(async (event) => {
     active = {}
   }
 
+  const { channels } = await getChannels({ includeDefaults: true })
   let didUpdateActive = false
-  for (const channel of CHANNEL_SLUGS) {
-    if (active?.[channel] === slug) {
-      active[channel] = ''
+  for (const channel of channels) {
+    if (active?.[channel.slug] === slug) {
+      active[channel.slug] = ''
       didUpdateActive = true
     }
   }

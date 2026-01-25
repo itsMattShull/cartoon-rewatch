@@ -1,9 +1,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { defineEventHandler } from 'h3'
+import { getChannels } from '../../utils/channels'
 
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
-const CHANNEL_SLUGS = ['toonami', 'adult-swim', 'saturday-morning']
 
 function safeParseJson(raw, fallback) {
   try {
@@ -24,8 +24,10 @@ export default defineEventHandler(async (event) => {
     mapping = {}
   }
 
+  const { channels } = await getChannels({ includeDefaults: true })
   const normalized = {}
-  for (const slug of CHANNEL_SLUGS) {
+  for (const channel of channels) {
+    const slug = channel.slug
     normalized[slug] = typeof mapping?.[slug] === 'string' ? mapping[slug] : ''
   }
 

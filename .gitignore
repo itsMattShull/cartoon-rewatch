@@ -6,6 +6,8 @@
 .cache
 dist
 assets/blocks/*
+assets/channels/*
+!assets/channels/.gitkeep
 !assets/blocks/.gitkeep
 
 # Node dependencies
