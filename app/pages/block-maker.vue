@@ -67,7 +67,13 @@
             @blur="updateVideoInfo(row, index)"
           />
           <div class="cell-preview">
-            <img v-if="getPreviewUrl(row.id)" :src="getPreviewUrl(row.id)" alt="" loading="lazy" />
+            <img
+              v-if="getPreviewUrl(row.id)"
+              :src="getPreviewUrl(row.id)"
+              alt=""
+              loading="lazy"
+              @click="openPreview(row)"
+            />
           </div>
           <input v-model.trim="row.title" type="text" class="cell-input" placeholder="Video title" />
           <input v-model.number="row.durationSeconds" type="number" min="0" class="cell-input" />
@@ -130,7 +136,13 @@
               />
             </label>
             <div class="cell-preview">
-              <img v-if="getPreviewUrl(row.id)" :src="getPreviewUrl(row.id)" alt="" loading="lazy" />
+              <img
+                v-if="getPreviewUrl(row.id)"
+                :src="getPreviewUrl(row.id)"
+                alt=""
+                loading="lazy"
+                @click="openPreview(row)"
+              />
             </div>
             <label class="card-field">
               <span>Title</span>
@@ -162,6 +174,36 @@
       <p>Only approved Discord accounts can access the Block Maker.</p>
       <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
     </section>
+
+    <div v-if="isPreviewOpen" class="preview-overlay" @click.self="closePreview">
+      <div class="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+        <div class="preview-header">
+          <h3 id="preview-title">{{ previewTitle || 'Preview' }}</h3>
+          <button class="secondary" type="button" @click="closePreview">Close</button>
+        </div>
+        <div class="preview-body">
+          <div class="preview-screen">
+            <div class="preview-screen-inner">
+              <iframe
+                v-if="previewEmbedUrl"
+                :key="previewEmbedUrl"
+                class="preview-player"
+                :src="previewEmbedUrl"
+                title="Video preview"
+                frameborder="0"
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowfullscreen
+              ></iframe>
+              <div class="preview-scanlines"></div>
+              <div class="preview-vignette"></div>
+            </div>
+          </div>
+        </div>
+        <div class="preview-footer">
+          <span class="status">TV Preview</span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -181,6 +223,9 @@ const fetchStatus = ref({})
 const dragUid = ref(null)
 const hoverIndex = ref(null)
 const updateTimers = ref({})
+const isPreviewOpen = ref(false)
+const previewVideoId = ref('')
+const previewTitle = ref('')
 let videoUidCounter = 0
 
 function toRow(video) {
@@ -301,6 +346,32 @@ function getPreviewUrl(id) {
   const videoId = normalizeVideoId(id)
   if (!videoId) return ''
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+}
+
+const previewEmbedUrl = computed(() => {
+  if (!previewVideoId.value) return ''
+  const params = new URLSearchParams({
+    autoplay: '1',
+    controls: '0',
+    rel: '0',
+    modestbranding: '1',
+    playsinline: '1'
+  })
+  return `https://www.youtube.com/embed/${previewVideoId.value}?${params.toString()}`
+})
+
+function openPreview(row) {
+  const videoId = normalizeVideoId(row?.id)
+  if (!videoId) return
+  previewVideoId.value = videoId
+  previewTitle.value = row?.title || 'Preview'
+  isPreviewOpen.value = true
+}
+
+function closePreview() {
+  isPreviewOpen.value = false
+  previewVideoId.value = ''
+  previewTitle.value = ''
 }
 
 async function fetchFromServer(videoId) {
@@ -734,6 +805,7 @@ watch(
   width: 100%;
   height: 100%;
   object-fit: cover;
+  cursor: pointer;
 }
 
 .cell-input {
@@ -803,6 +875,101 @@ watch(
 .locked p {
   margin: 0 0 16px;
   color: #cab688;
+}
+
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 4, 6, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 1000;
+}
+
+.preview-modal {
+  width: min(920px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1a1b20, #2a2419 80%);
+  border-radius: 16px;
+  border: 1px solid #7c6845;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.preview-header,
+.preview-footer {
+  padding: 14px 18px;
+  background: rgba(11, 10, 9, 0.7);
+  border-bottom: 1px solid rgba(124, 104, 69, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preview-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.preview-body {
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.preview-footer {
+  border-top: 1px solid rgba(124, 104, 69, 0.5);
+  border-bottom: none;
+}
+
+.preview-screen {
+  background: #1b1c1d;
+  border-radius: 14px;
+  padding: 18px;
+  border: 2px solid #4f422c;
+}
+
+.preview-screen-inner {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  background: radial-gradient(circle at center, #243f2e 0%, #0b0c0d 70%);
+}
+
+.preview-player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.preview-scanlines,
+.preview-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.preview-scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.15),
+    rgba(0, 0, 0, 0.15) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+  mix-blend-mode: multiply;
+}
+
+.preview-vignette {
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6);
 }
 
 @media (max-width: 900px) {

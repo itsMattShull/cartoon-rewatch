@@ -9,6 +9,9 @@
         <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
           Sign in with Discord
         </a>
+        <button v-if="isAuthorized" class="primary" type="button" @click="openCreateChannel">
+          Create Channel
+        </button>
         <a v-if="isAuthorized" class="primary" href="/block-maker">Create Block</a>
       </div>
     </header>
@@ -17,28 +20,6 @@
       <div class="section-header">
         <h2>Channels</h2>
         <span class="status">{{ isLoading ? 'Loading...' : `${channels.length} channels` }}</span>
-      </div>
-      <div class="channels-toolbar">
-        <label class="field">
-          <span>New channel name</span>
-          <input
-            v-model="newChannelName"
-            type="text"
-            maxlength="16"
-            placeholder="Up to 16 characters"
-          />
-        </label>
-        <div class="channel-actions">
-          <span class="status">{{ newChannelName.length }}/16</span>
-          <button
-            class="primary"
-            type="button"
-            :disabled="isCreatingChannel || !canCreateChannel"
-            @click="createChannel"
-          >
-            {{ isCreatingChannel ? 'Creating...' : 'Create Channel' }}
-          </button>
-        </div>
       </div>
       <div class="channels-grid">
         <article v-for="channel in channels" :key="channel.slug" class="channel-card">
@@ -67,7 +48,10 @@
               </select>
             </label>
             <div class="channel-actions">
-              <button class="danger" type="button" @click="confirmDeleteChannel(channel)">
+              <button class="secondary" type="button" @click="openEditChannel(channel)">
+                Edit
+              </button>
+              <button class="danger align-right" type="button" @click="confirmDeleteChannel(channel)">
                 Delete Channel
               </button>
             </div>
@@ -152,6 +136,43 @@
       <p>Only approved Discord accounts can access Blocks.</p>
       <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
     </section>
+
+    <div v-if="isModalOpen" class="modal-overlay" @click.self="closeModal">
+      <div class="modal-window" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title">
+        <div class="modal-header">
+          <h3 id="channel-modal-title">
+            {{ modalMode === 'edit' ? 'Edit Channel' : 'Create Channel' }}
+          </h3>
+          <button class="modal-close" type="button" @click="closeModal">Close</button>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>Channel name</span>
+            <input
+              v-model="modalChannelName"
+              type="text"
+              maxlength="16"
+              placeholder="Up to 16 characters"
+            />
+          </label>
+          <p class="modal-help">Max 16 characters. Names must be unique.</p>
+        </div>
+        <div class="modal-footer">
+          <span class="status">{{ modalChannelName.length }}/16</span>
+          <div class="modal-actions">
+            <button class="secondary" type="button" @click="closeModal">Cancel</button>
+            <button
+              class="primary"
+              type="button"
+              :disabled="isSavingChannel || !canSaveChannel"
+              @click="saveChannel"
+            >
+              {{ isSavingChannel ? 'Saving...' : modalMode === 'edit' ? 'Save Changes' : 'Create Channel' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -168,11 +189,14 @@ const selectedBlocks = ref({})
 const isLoading = ref(false)
 const currentPage = ref(1)
 const pageSize = 50
-const newChannelName = ref('')
-const isCreatingChannel = ref(false)
+const isModalOpen = ref(false)
+const modalMode = ref('create')
+const modalChannelName = ref('')
+const editingChannel = ref(null)
+const isSavingChannel = ref(false)
 const channelNameLimit = 16
-const canCreateChannel = computed(() => {
-  const name = newChannelName.value.trim()
+const canSaveChannel = computed(() => {
+  const name = modalChannelName.value.trim()
   return name.length > 0 && name.length <= channelNameLimit
 })
 
@@ -236,20 +260,46 @@ async function refreshAll() {
   }
 }
 
-async function createChannel() {
-  if (!isAuthorized.value || !canCreateChannel.value) return
-  isCreatingChannel.value = true
+function openCreateChannel() {
+  modalMode.value = 'create'
+  modalChannelName.value = ''
+  editingChannel.value = null
+  isModalOpen.value = true
+}
+
+function openEditChannel(channel) {
+  modalMode.value = 'edit'
+  modalChannelName.value = channel?.name || ''
+  editingChannel.value = channel
+  isModalOpen.value = true
+}
+
+function closeModal() {
+  if (isSavingChannel.value) return
+  isModalOpen.value = false
+}
+
+async function saveChannel() {
+  if (!isAuthorized.value || !canSaveChannel.value) return
+  isSavingChannel.value = true
   try {
-    await $fetch('/api/channels/create', {
-      method: 'POST',
-      body: { name: newChannelName.value.trim() }
-    })
-    newChannelName.value = ''
+    if (modalMode.value === 'edit' && editingChannel.value?.slug) {
+      await $fetch('/api/channels/update', {
+        method: 'POST',
+        body: { slug: editingChannel.value.slug, name: modalChannelName.value.trim() }
+      })
+    } else {
+      await $fetch('/api/channels/create', {
+        method: 'POST',
+        body: { name: modalChannelName.value.trim() }
+      })
+    }
     await refreshAll()
+    isModalOpen.value = false
   } catch (error) {
-    alert('Failed to create channel. Check server logs for details.')
+    alert('Failed to save channel. Check server logs for details.')
   } finally {
-    isCreatingChannel.value = false
+    isSavingChannel.value = false
   }
 }
 
@@ -366,6 +416,8 @@ watch(
   border: 1px solid #f9d98f;
   background: #3a2c1c;
   color: #f7e4b4;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
   cursor: pointer;
   text-decoration: none;
   display: inline-flex;
@@ -379,6 +431,8 @@ watch(
   border: 1px solid #7c6845;
   background: #1a1b20;
   color: #f7e4b4;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
   cursor: pointer;
   text-decoration: none;
   display: inline-flex;
@@ -409,22 +463,14 @@ watch(
   gap: 16px;
 }
 
-.channels-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-end;
-  margin-bottom: 16px;
-}
-
-.channels-toolbar .field {
-  min-width: min(320px, 100%);
-}
-
 .channel-actions {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.align-right {
+  margin-left: auto;
 }
 
 .channel-card {
@@ -501,6 +547,75 @@ watch(
   background: #1a1b20;
   color: #f7e4b4;
   font-family: 'Orbitron', sans-serif;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 4, 6, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 1000;
+}
+
+.modal-window {
+  width: min(520px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1a1b20, #2a2419 80%);
+  border-radius: 16px;
+  border: 1px solid #7c6845;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.modal-header,
+.modal-footer {
+  padding: 14px 18px;
+  background: rgba(11, 10, 9, 0.7);
+  border-bottom: 1px solid rgba(124, 104, 69, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-close {
+  border: 1px solid #7c6845;
+  background: #1a1b20;
+  color: #f7e4b4;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.modal-body {
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.modal-help {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #cab688;
+}
+
+.modal-footer {
+  border-top: 1px solid rgba(124, 104, 69, 0.5);
+  border-bottom: none;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .blocks-table {

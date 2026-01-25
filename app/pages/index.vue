@@ -160,8 +160,9 @@ const defaultChannelNames = {
 }
 
 function buildChannel(payload, fallbackName, index) {
-  const name =
-    (typeof payload?.channel === 'string' && payload.channel.trim()) || fallbackName || `Channel ${index + 1}`
+  const payloadName = typeof payload?.channel === 'string' ? payload.channel.trim() : ''
+  const fallback = typeof fallbackName === 'string' ? fallbackName.trim() : ''
+  const name = fallback || payloadName || `Channel ${index + 1}`
   const videos = Array.isArray(payload?.videos) ? payload.videos : []
   const normalizedVideos = videos
     .filter((video) => video && typeof video.id === 'string' && video.id.trim().length > 0)
@@ -170,11 +171,11 @@ function buildChannel(payload, fallbackName, index) {
       return {
         id: video.id.trim(),
         title: video.title || `${name} Video ${videoIndex + 1}`,
-        durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : 1
+        durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : 0
       }
     })
 
-  const totalDuration = normalizedVideos.reduce((sum, video) => sum + video.durationSeconds, 0)
+  const totalDuration = normalizedVideos.reduce((sum, video) => sum + Math.max(0, video.durationSeconds), 0)
 
   return {
     name,
@@ -208,7 +209,12 @@ const activeChannel = computed(() => channels.value[activeChannelIndex.value])
 
 const scheduleInfo = computed(() => {
   const channel = activeChannel.value
-  if (!channel || channel.totalDuration <= 0) return null
+  if (!channel) return null
+  if (channel.totalDuration <= 0) {
+    return channel.videos.length
+      ? { index: 0, video: channel.videos[0], offsetSeconds: 0 }
+      : null
+  }
 
   const seconds = getSecondsSinceMidnightInZone(now.value, scheduleTimeZone)
   const position = seconds % channel.totalDuration
@@ -371,7 +377,10 @@ function formatTime(seconds) {
 }
 
 function getVideoAt(channel, secondsOfDay) {
-  if (!channel || channel.totalDuration <= 0 || channel.videos.length === 0) return null
+  if (!channel || channel.videos.length === 0) return null
+  if (channel.totalDuration <= 0) {
+    return { index: 0, video: channel.videos[0], offset: 0 }
+  }
   const position = secondsOfDay % channel.totalDuration
   let cursor = 0
   for (let index = 0; index < channel.videos.length; index += 1) {
@@ -386,7 +395,17 @@ function getVideoAt(channel, secondsOfDay) {
 }
 
 function buildGuideBlocks(channel, startSecondsOfDay, windowSeconds) {
-  if (!channel || channel.totalDuration <= 0 || channel.videos.length === 0) return []
+  if (!channel || channel.videos.length === 0) return []
+  if (channel.totalDuration <= 0) {
+    const video = channel.videos[0]
+    return [
+      {
+        title: video.title,
+        durationSeconds: windowSeconds,
+        startOffsetSeconds: 0
+      }
+    ]
+  }
   const blocks = []
   let remaining = windowSeconds
   let info = getVideoAt(channel, startSecondsOfDay)
