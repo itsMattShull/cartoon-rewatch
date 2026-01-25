@@ -1,0 +1,76 @@
+{
+  "channel": "Toonami",
+  "note": "Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.",
+  "videos": [
+    {
+      "id": "1LFlc2dBVKA",
+      "title": "Dragon Ball Z   S01E01   The Arrival of Raditz !",
+      "durationSeconds": 1200
+    },
+    {
+      "id": "GgSByRw0gqM",
+      "title": "Dragon Ball Z   S01E03   Gohan's Hidden Powers",
+      "durationSeconds": 1314
+    },
+    {
+      "id": "80Fba6_90I4",
+      "title": "MOBILE SUIT GUNDAM WING HD REMASTER - Episode 1 (EN,HK,TW,KR,VN Sub)",
+      "durationSeconds": 1517
+    },
+    {
+      "id": "sDqX9SSGMBg",
+      "title": "MOBILE SUIT GUNDAM WING HD REMASTER - Episode 2 (EN,HK,TW,KR,VN Sub)",
+      "durationSeconds": 1518
+    },
+    {
+      "id": "c1nF9_fMIk8",
+      "title": "Yu Yu Hakusho Episode 1 HD",
+      "durationSeconds": 1421
+    },
+    {
+      "id": "JG-VERyhKUc",
+      "title": "Yu Yu Hakusho Full Episode 2",
+      "durationSeconds": 1422
+    },
+    {
+      "id": "gttSOCusST0",
+      "title": "Tenchi Muyo! Ryo-Ohki [DUBLADO] 1992- EP 01",
+      "durationSeconds": 1730
+    },
+    {
+      "id": "Xv8FbocoZsI",
+      "title": "Tenchi Muyo! Ryo-Ohki [DUBLADO] 1992- EP 02",
+      "durationSeconds": 1786
+    },
+    {
+      "id": "iciHV9D5DKc",
+      "title": "Outlaw Star EP 02 - World of Desires",
+      "durationSeconds": 1506
+    },
+    {
+      "id": "LwCUlz2pVZs",
+      "title": "Outlaw Star EP 03  Into Burning Space",
+      "durationSeconds": 1512
+    },
+    {
+      "id": "M95fN0a_ius",
+      "title": "Thundercats 2011 Season 1 Episode 13 Between Brothers | Full Episode | HD English Version",
+      "durationSeconds": 1318
+    },
+    {
+      "id": "gOb_cSKkgl4",
+      "title": "Thundercats 2011 Season 1 Episode 14 New Alliances | Full Episode | HD English Version",
+      "durationSeconds": 1336
+    },
+    {
+      "id": "ceStktmo3ts",
+      "title": "Samurai Jack Battle Through Time Episode 1",
+      "durationSeconds": 999
+    },
+    {
+      "id": "9NkMOg_2xpo",
+      "title": "Samurai Jack Battle Through Time Episode 2",
+      "durationSeconds": 1374
+    }
+  ]
+}
