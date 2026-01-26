@@ -1,18 +1,19 @@
 import { createError, defineEventHandler, getQuery } from 'h3'
-import { Innertube, UniversalCache } from 'youtubei.js'
 import { getSessionFromEvent } from '../utils/auth'
 
-let clientPromise
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 
-function getClient() {
-  if (!clientPromise) {
-    clientPromise = Innertube.create({
-      cache: new UniversalCache(false)
-    })
-  }
-  return clientPromise
-}
+// youtubei.js fallback disabled for now.
+// import { Innertube, UniversalCache } from 'youtubei.js'
+// let clientPromise
+// function getClient() {
+//   if (!clientPromise) {
+//     clientPromise = Innertube.create({
+//       cache: new UniversalCache(false)
+//     })
+//   }
+//   return clientPromise
+// }
 
 function normalizeVideoId(input) {
   if (!input) return ''
@@ -53,27 +54,27 @@ function normalizeVideoId(input) {
   return trimmed
 }
 
-function getDurationSeconds(info) {
-  const candidate =
-    info?.basic_info?.duration ??
-    info?.video_details?.duration ??
-    info?.basic_info?.length_seconds ??
-    info?.video_details?.length_seconds ??
-    info?.duration
-
-  const value = Number(candidate)
-  return Number.isFinite(value) ? value : 0
-}
-
-function getTitle(info) {
-  return (
-    info?.basic_info?.title ||
-    info?.video_details?.title ||
-    info?.primary_info?.title?.text ||
-    info?.title ||
-    ''
-  )
-}
+// function getDurationSeconds(info) {
+//   const candidate =
+//     info?.basic_info?.duration ??
+//     info?.video_details?.duration ??
+//     info?.basic_info?.length_seconds ??
+//     info?.video_details?.length_seconds ??
+//     info?.duration
+//
+//   const value = Number(candidate)
+//   return Number.isFinite(value) ? value : 0
+// }
+//
+// function getTitle(info) {
+//   return (
+//     info?.basic_info?.title ||
+//     info?.video_details?.title ||
+//     info?.primary_info?.title?.text ||
+//     info?.title ||
+//     ''
+//   )
+// }
 
 function parseIsoDuration(value) {
   if (!value || typeof value !== 'string') return 0
@@ -123,26 +124,29 @@ export default defineEventHandler(async (event) => {
   let durationSeconds = 0
   let lastError = null
 
-  try {
-    const client = await getClient()
-    const info = await client.getBasicInfo(videoId)
-    title = getTitle(info)
-    durationSeconds = getDurationSeconds(info)
-  } catch (error) {
-    lastError = error
-  }
-
-  if ((!title || !durationSeconds) && YOUTUBE_API_KEY) {
+  if (YOUTUBE_API_KEY) {
     try {
-      const fallback = await fetchFromOfficialApi(videoId)
-      if (fallback) {
-        title = title || fallback.title
-        durationSeconds = durationSeconds || fallback.durationSeconds
+      const primary = await fetchFromOfficialApi(videoId)
+      if (primary) {
+        title = primary.title
+        durationSeconds = primary.durationSeconds
       }
     } catch (error) {
       lastError = error
     }
   }
+
+  // youtubei.js fallback disabled for now.
+  // if (!title || !durationSeconds) {
+  //   try {
+  //     const client = await getClient()
+  //     const info = await client.getBasicInfo(videoId)
+  //     title = title || getTitle(info)
+  //     durationSeconds = durationSeconds || getDurationSeconds(info)
+  //   } catch (error) {
+  //     lastError = error
+  //   }
+  // }
 
   if (!title && lastError) {
     throw createError({
