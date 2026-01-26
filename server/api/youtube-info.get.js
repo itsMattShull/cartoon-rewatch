@@ -3,6 +3,7 @@ import { Innertube, UniversalCache } from 'youtubei.js'
 import { getSessionFromEvent } from '../utils/auth'
 
 let clientPromise
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 
 function getClient() {
   if (!clientPromise) {
@@ -74,6 +75,37 @@ function getTitle(info) {
   )
 }
 
+function parseIsoDuration(value) {
+  if (!value || typeof value !== 'string') return 0
+  const match = value.match(/P(?:\\d+Y)?(?:\\d+M)?(?:\\d+W)?(?:\\d+D)?T?(\\d+H)?(\\d+M)?(\\d+S)?/i)
+  if (!match) return 0
+  const hours = Number(match[1]?.replace('H', '') || 0)
+  const minutes = Number(match[2]?.replace('M', '') || 0)
+  const seconds = Number(match[3]?.replace('S', '') || 0)
+  if (![hours, minutes, seconds].every(Number.isFinite)) return 0
+  return hours * 3600 + minutes * 60 + seconds
+}
+
+async function fetchFromOfficialApi(videoId) {
+  if (!YOUTUBE_API_KEY) return null
+  const url = new URL('https://www.googleapis.com/youtube/v3/videos')
+  url.searchParams.set('part', 'snippet,contentDetails')
+  url.searchParams.set('id', videoId)
+  url.searchParams.set('key', YOUTUBE_API_KEY)
+  const response = await fetch(url.toString())
+  if (!response.ok) {
+    const message = await response.text().catch(() => '')
+    throw new Error(message || `YouTube API request failed (${response.status})`)
+  }
+  const data = await response.json()
+  const item = data?.items?.[0]
+  if (!item) return null
+  return {
+    title: item?.snippet?.title || '',
+    durationSeconds: parseIsoDuration(item?.contentDetails?.duration)
+  }
+}
+
 export default defineEventHandler(async (event) => {
   const session = getSessionFromEvent(event)
   if (!session) {
@@ -87,18 +119,41 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Missing video id' })
   }
 
+  let title = ''
+  let durationSeconds = 0
+  let lastError = null
+
   try {
     const client = await getClient()
     const info = await client.getBasicInfo(videoId)
-    return {
-      id: videoId,
-      title: getTitle(info),
-      durationSeconds: getDurationSeconds(info)
-    }
+    title = getTitle(info)
+    durationSeconds = getDurationSeconds(info)
   } catch (error) {
+    lastError = error
+  }
+
+  if ((!title || !durationSeconds) && YOUTUBE_API_KEY) {
+    try {
+      const fallback = await fetchFromOfficialApi(videoId)
+      if (fallback) {
+        title = title || fallback.title
+        durationSeconds = durationSeconds || fallback.durationSeconds
+      }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  if (!title && lastError) {
     throw createError({
       statusCode: 500,
       statusMessage: 'Failed to fetch video info'
     })
+  }
+
+  return {
+    id: videoId,
+    title,
+    durationSeconds
   }
 })
