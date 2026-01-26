@@ -5,6 +5,17 @@
         <span class="brand-mark">Cartoon ReWatch</span>
         <span class="brand-sub">Grab cereal and enjoy.</span>
       </div>
+      <div class="viewer-stats">
+        <div class="viewer-stat">
+          <span class="viewer-label">Total Viewers</span>
+          <span class="viewer-value">{{ totalViewers }}</span>
+        </div>
+        <div class="viewer-stat">
+          <span class="viewer-label">Channel Viewers</span>
+          <span class="viewer-value">{{ channelViewers }}</span>
+          <span class="viewer-sub">{{ activeChannel?.name ?? 'Channel' }}</span>
+        </div>
+      </div>
       <div class="clock">
         <span class="clock-label">Local Time</span>
         <span class="clock-time">{{ formattedClock }}</span>
@@ -143,7 +154,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
@@ -159,7 +170,7 @@ const defaultChannelNames = {
   'saturday-morning': saturdayMorningData?.channel || 'Saturday Morning'
 }
 
-function buildChannel(payload, fallbackName, index) {
+function buildChannel(payload, fallbackName, index, slug) {
   const payloadName = typeof payload?.channel === 'string' ? payload.channel.trim() : ''
   const fallback = typeof fallbackName === 'string' ? fallbackName.trim() : ''
   const name = fallback || payloadName || `Channel ${index + 1}`
@@ -178,6 +189,7 @@ function buildChannel(payload, fallbackName, index) {
   const totalDuration = normalizedVideos.reduce((sum, video) => sum + Math.max(0, video.durationSeconds), 0)
 
   return {
+    slug,
     name,
     videos: normalizedVideos,
     totalDuration
@@ -198,14 +210,30 @@ const now = ref(new Date())
 const screenInner = ref(null)
 const supportSlot = ref(null)
 const hasLoadedChannel = ref(false)
+const viewerCounts = ref({ total: 0, channels: {} })
+const viewerId = ref(null)
 
 let player = null
 let clockInterval = null
 let syncInterval = null
 let resizeObserver = null
+let viewerSocket = null
+let viewerReconnectDelay = 1000
+let viewerReconnectTimer = null
+let viewerShouldReconnect = true
+let viewerHelloTimer = null
+const pendingChannelSlug = ref('')
 const storageKey = 'crt80:lastChannel'
+const viewerStorageKey = 'crt80:viewerId'
 
 const activeChannel = computed(() => channels.value[activeChannelIndex.value])
+const activeChannelSlug = computed(() => activeChannel.value?.slug || '')
+const totalViewers = computed(() => viewerCounts.value?.total || 0)
+const channelViewers = computed(() => {
+  const slug = activeChannelSlug.value
+  if (!slug) return 0
+  return viewerCounts.value?.channels?.[slug] || 0
+})
 
 const scheduleInfo = computed(() => {
   const channel = activeChannel.value
@@ -439,6 +467,120 @@ function formatLocalTimeFromGuide(offsetSeconds) {
   return stamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
+function createViewerId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getOrCreateViewerId() {
+  if (typeof window === 'undefined') return null
+  let id = window.localStorage.getItem(viewerStorageKey)
+  if (!id) {
+    id = createViewerId()
+    window.localStorage.setItem(viewerStorageKey, id)
+  }
+  return id
+}
+
+function getViewerSocketUrl() {
+  if (typeof window === 'undefined') return ''
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${window.location.host}/api/viewers`
+}
+
+function handleViewerMessage(event) {
+  if (!event?.data) return
+  let data = null
+  try {
+    data = JSON.parse(event.data)
+  } catch (error) {
+    data = null
+  }
+  if (!data || data.type !== 'counts') return
+  const total = Number(data.total) || 0
+  const channels = data.channels && typeof data.channels === 'object' ? data.channels : {}
+  viewerCounts.value = { total, channels }
+}
+
+function sendViewerMessage(type, payload) {
+  if (!viewerSocket || viewerSocket.readyState !== WebSocket.OPEN) return
+  viewerSocket.send(JSON.stringify({ type, ...payload }))
+}
+
+function scheduleViewerReconnect() {
+  if (!viewerShouldReconnect || typeof window === 'undefined') return
+  if (viewerReconnectTimer) return
+  viewerReconnectTimer = window.setTimeout(() => {
+    viewerReconnectTimer = null
+    connectViewerSocket()
+    viewerReconnectDelay = Math.min(viewerReconnectDelay * 1.6, 15000)
+  }, viewerReconnectDelay)
+}
+
+function connectViewerSocket() {
+  if (!viewerShouldReconnect || typeof window === 'undefined') return
+  const url = getViewerSocketUrl()
+  if (!url) return
+  if (viewerSocket) {
+    viewerSocket.close()
+  }
+  const socket = new WebSocket(url)
+  viewerSocket = socket
+  socket.addEventListener('open', () => {
+    if (viewerSocket !== socket) return
+    viewerReconnectDelay = 1000
+    sendViewerMessage('hello', {
+      viewerId: viewerId.value,
+      channel: activeChannelSlug.value || null
+    })
+    if (viewerHelloTimer) {
+      window.clearTimeout(viewerHelloTimer)
+    }
+    viewerHelloTimer = window.setTimeout(() => {
+      sendViewerMessage('hello', {
+        viewerId: viewerId.value,
+        channel: activeChannelSlug.value || null
+      })
+    }, 800)
+    if (pendingChannelSlug.value) {
+      sendViewerMessage('channel', { viewerId: viewerId.value, channel: pendingChannelSlug.value })
+      pendingChannelSlug.value = ''
+    }
+  })
+  socket.addEventListener('message', (event) => {
+    if (viewerSocket !== socket) return
+    handleViewerMessage(event)
+  })
+  socket.addEventListener('close', () => {
+    if (viewerSocket !== socket) return
+    if (viewerHelloTimer) {
+      window.clearTimeout(viewerHelloTimer)
+      viewerHelloTimer = null
+    }
+    scheduleViewerReconnect()
+  })
+  socket.addEventListener('error', () => {
+    if (viewerSocket !== socket) return
+    if (viewerHelloTimer) {
+      window.clearTimeout(viewerHelloTimer)
+      viewerHelloTimer = null
+    }
+    scheduleViewerReconnect()
+  })
+}
+
+watch(activeChannelSlug, (slug, prev) => {
+  if (!slug || slug === prev) return
+  if (!viewerId.value) return
+  if (viewerSocket && viewerSocket.readyState === WebSocket.OPEN) {
+    sendViewerMessage('channel', { viewerId: viewerId.value, channel: slug })
+  } else {
+    pendingChannelSlug.value = slug
+  }
+})
+
 function setChannel(index) {
   if (!channels.value.length) return
   activeChannelIndex.value = index
@@ -662,7 +804,7 @@ async function loadActiveBlocks() {
     channels.value = activeChannels.map((channel, index) => {
       const fallbackName = channel.name || defaultChannelNames[channel.slug] || channel.slug
       const payload = payloads[channel.slug] || defaultChannelPayloads[channel.slug]
-      return buildChannel(payload, fallbackName, index)
+      return buildChannel(payload, fallbackName, index, channel.slug)
     })
 
     if (activeChannelIndex.value >= channels.value.length) {
@@ -680,6 +822,7 @@ onMounted(async () => {
       activeChannelIndex.value = saved
     }
   }
+  viewerId.value = getOrCreateViewerId()
   hasLoadedChannel.value = true
   injectSupportButton()
   clockInterval = window.setInterval(() => {
@@ -687,6 +830,8 @@ onMounted(async () => {
   }, 1000)
 
   await loadActiveBlocks()
+  viewerShouldReconnect = true
+  connectViewerSocket()
   await ensureYouTubeApi()
   if (!player) {
     createPlayer()
@@ -709,6 +854,10 @@ onBeforeUnmount(() => {
   if (syncInterval) window.clearInterval(syncInterval)
   if (resizeObserver) resizeObserver.disconnect()
   if (player && player.destroy) player.destroy()
+  viewerShouldReconnect = false
+  if (viewerReconnectTimer) window.clearTimeout(viewerReconnectTimer)
+  if (viewerHelloTimer) window.clearTimeout(viewerHelloTimer)
+  if (viewerSocket) viewerSocket.close()
 })
 </script>
 
@@ -741,6 +890,8 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
   max-width: 100%;
   padding: 12px 18px;
   background: linear-gradient(90deg, #1f2024, #2f2b20 60%, #3b2b17);
@@ -786,6 +937,46 @@ onBeforeUnmount(() => {
 .clock-time {
   font-size: 28px;
   color: #fdf0c2;
+}
+
+.viewer-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewer-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 110px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid #a88c5a;
+  background: rgba(21, 22, 27, 0.7);
+  font-family: 'VT323', monospace;
+}
+
+.viewer-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #d7c7a4;
+}
+
+.viewer-value {
+  font-size: 24px;
+  color: #fdf0c2;
+}
+
+.viewer-sub {
+  font-size: 12px;
+  color: #bfa981;
+  max-width: 140px;
+  text-align: center;
 }
 
 .tv-layout {

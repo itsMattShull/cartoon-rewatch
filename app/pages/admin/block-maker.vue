@@ -1,5 +1,6 @@
 <template>
   <div class="maker-page">
+    <AdminNav />
     <header class="maker-header">
       <div>
         <h1>Block Maker</h1>
@@ -9,7 +10,7 @@
         <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
           Sign in with Discord
         </a>
-        <a class="secondary" href="/blocks">Back to Blocks</a>
+        <a class="secondary" href="/admin">Back to Admin</a>
         <button v-if="isAuthorized" class="primary" type="button" @click="saveBlock">
           Save Block
         </button>
@@ -514,7 +515,7 @@ async function saveBlock() {
     if (response?.slug) {
       blockSlug.value = response.slug
     }
-    router.push('/blocks')
+    router.push('/admin')
   } catch (error) {
     const statusMessage =
       error?.data?.statusMessage ||

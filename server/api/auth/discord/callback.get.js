@@ -73,5 +73,5 @@ export default defineEventHandler(async (event) => {
     maxAge: 0
   })
 
-  return sendRedirect(event, '/blocks')
+  return sendRedirect(event, '/admin')
 })

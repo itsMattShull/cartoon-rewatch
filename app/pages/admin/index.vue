@@ -1,5 +1,6 @@
 <template>
   <div class="blocks-page">
+    <AdminNav />
     <header class="blocks-header">
       <div>
         <h1>Blocks</h1>
@@ -12,7 +13,7 @@
         <button v-if="isAuthorized" class="primary" type="button" @click="openCreateChannel">
           Create Channel
         </button>
-        <a v-if="isAuthorized" class="primary" href="/block-maker">Create Block</a>
+        <a v-if="isAuthorized" class="primary" href="/admin/block-maker">Create Block</a>
       </div>
     </header>
 
@@ -85,7 +86,7 @@
           <span>{{ formatDate(block.updatedAt) }}</span>
           <span>{{ formatUser(block.updatedBy) }}</span>
           <div class="row-actions">
-            <a class="secondary" :href="`/block-maker?block=${block.slug}`">Edit</a>
+            <a class="secondary" :href="`/admin/block-maker?block=${block.slug}`">Edit</a>
             <button class="danger" type="button" @click="confirmDelete(block)">Delete</button>
           </div>
         </div>
@@ -110,7 +111,7 @@
             </div>
           </div>
           <div class="card-actions">
-            <a class="secondary" :href="`/block-maker?block=${block.slug}`">Edit</a>
+            <a class="secondary" :href="`/admin/block-maker?block=${block.slug}`">Edit</a>
             <button class="danger" type="button" @click="confirmDelete(block)">Delete</button>
           </div>
         </article>
@@ -459,8 +460,14 @@ watch(
 
 .channels-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .channels-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .channel-actions {
