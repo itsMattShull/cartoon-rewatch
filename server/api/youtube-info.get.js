@@ -78,13 +78,17 @@ function normalizeVideoId(input) {
 
 function parseIsoDuration(value) {
   if (!value || typeof value !== 'string') return 0
-  const match = value.match(/P(?:\\d+Y)?(?:\\d+M)?(?:\\d+W)?(?:\\d+D)?T?(\\d+H)?(\\d+M)?(\\d+S)?/i)
+  const match = value.match(
+    /P(?:(\\d+)W)?(?:(\\d+)D)?(?:T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?)?/i
+  )
   if (!match) return 0
-  const hours = Number(match[1]?.replace('H', '') || 0)
-  const minutes = Number(match[2]?.replace('M', '') || 0)
-  const seconds = Number(match[3]?.replace('S', '') || 0)
-  if (![hours, minutes, seconds].every(Number.isFinite)) return 0
-  return hours * 3600 + minutes * 60 + seconds
+  const weeks = Number(match[1] || 0)
+  const days = Number(match[2] || 0)
+  const hours = Number(match[3] || 0)
+  const minutes = Number(match[4] || 0)
+  const seconds = Number(match[5] || 0)
+  if (![weeks, days, hours, minutes, seconds].every(Number.isFinite)) return 0
+  return weeks * 604800 + days * 86400 + hours * 3600 + minutes * 60 + seconds
 }
 
 async function fetchFromOfficialApi(videoId) {
@@ -103,7 +107,8 @@ async function fetchFromOfficialApi(videoId) {
   if (!item) return null
   return {
     title: item?.snippet?.title || '',
-    durationSeconds: parseIsoDuration(item?.contentDetails?.duration)
+    durationSeconds: parseIsoDuration(item?.contentDetails?.duration),
+    rawDuration: item?.contentDetails?.duration || ''
   }
 }
 
@@ -130,6 +135,7 @@ export default defineEventHandler(async (event) => {
       if (primary) {
         title = primary.title
         durationSeconds = primary.durationSeconds
+        rawDuration = primary.rawDuration || ''
       }
     } catch (error) {
       lastError = error
@@ -158,6 +164,7 @@ export default defineEventHandler(async (event) => {
   return {
     id: videoId,
     title,
-    durationSeconds
+    durationSeconds,
+    rawDuration
   }
 })
