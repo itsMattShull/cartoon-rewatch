@@ -79,7 +79,7 @@ function normalizeVideoId(input) {
 function parseIsoDuration(value) {
   if (!value || typeof value !== 'string') return 0
   const match = value.match(
-    /P(?:(\\d+)W)?(?:(\\d+)D)?(?:T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?)?/i
+    /P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?/i
   )
   if (!match) return 0
   const weeks = Number(match[1] || 0)
@@ -127,6 +127,7 @@ export default defineEventHandler(async (event) => {
 
   let title = ''
   let durationSeconds = 0
+  let rawDuration = ''
   let lastError = null
 
   if (YOUTUBE_API_KEY) {
