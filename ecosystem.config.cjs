@@ -14,7 +14,8 @@ module.exports = {
         DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
         DISCORD_REDIRECT_URI: process.env.DISCORD_REDIRECT_URI,
         DISCORD_ALLOWED_IDS: process.env.DISCORD_ALLOWED_IDS,
-        SESSION_SECRET: process.env.SESSION_SECRET
+        SESSION_SECRET: process.env.SESSION_SECRET,
+        YOUTUBE_API_KEY: process.env.YOUTUBE_API_KEY
       }
     }
   ]
