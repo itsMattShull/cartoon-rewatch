@@ -215,7 +215,7 @@ const route = useRoute()
 const router = useRouter()
 
 const { data: authData } = await useFetch('/api/auth/me')
-const isAuthorized = computed(() => authData.value?.authenticated)
+const isAuthorized = computed(() => authData.value?.authenticated && authData.value?.allowed)
 
 const blockName = ref('')
 const blockSlug = ref('')

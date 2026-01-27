@@ -5,17 +5,6 @@
         <span class="brand-mark">Cartoon ReWatch</span>
         <span class="brand-sub">Grab cereal and enjoy.</span>
       </div>
-      <div class="viewer-stats">
-        <div class="viewer-stat">
-          <span class="viewer-label">Total Viewers</span>
-          <span class="viewer-value">{{ totalViewers }}</span>
-        </div>
-        <div class="viewer-stat">
-          <span class="viewer-label">Channel Viewers</span>
-          <span class="viewer-value">{{ channelViewers }}</span>
-          <span class="viewer-sub">{{ activeChannel?.name ?? 'Channel' }}</span>
-        </div>
-      </div>
       <div class="clock">
         <span class="clock-label">Local Time</span>
         <span class="clock-time">{{ formattedClock }}</span>
@@ -62,6 +51,7 @@
       </section>
 
       <aside class="controls">
+        <a href="https://www.cartoonreorbit.com" target="_blank"><img class="ad-banner" src="/ad1.gif" alt="" loading="lazy" /></a>
         <div class="panel">
           <div class="panel-header">
             {{ hasLoadedChannel ? activeChannel?.name ?? 'TV Controls' : 'Loading...' }}
@@ -74,78 +64,143 @@
             </div>
           </div>
 
-          <div class="controls-row">
-            <button class="dial" type="button" @click="prevChannel">CH -</button>
-            <button class="dial" type="button" @click="nextChannel">CH +</button>
-          </div>
-
-          <div class="controls-row">
-            <button class="toggle" :class="{ active: isOn }" type="button" @click="togglePower">
-              Power
-            </button>
-            <button class="toggle" type="button" @click="toggleMute">
-              {{ isMuted ? 'Unmute' : 'Mute' }}
-            </button>
-          </div>
-
-          <div class="volume-control">
-            <div class="volume-header">
-              <span class="volume-label">Volume</span>
-              <span class="volume-value">{{ volumeDisplay }}</span>
+          <div class="viewer-counts">
+            <div class="viewer-count">
+              <span class="label">Total Viewers</span>
+              <strong>{{ totalViewers }}</strong>
             </div>
-            <input
-              class="volume-slider"
-              type="range"
-              min="0"
-              :max="maxVolumePercent"
-              step="1"
-              v-model.number="volumePercent"
-              :disabled="!playerReady || !isOn"
-              @input="handleVolumeInput"
-            />
-            <div class="volume-scale">
-              <span>0%</span>
-              <span>50%</span>
-              <span>100%</span>
+            <div class="viewer-count">
+              <span class="label">Channel Viewers</span>
+              <strong>{{ channelViewers }}</strong>
             </div>
           </div>
 
-          <div class="guide">
-            <div class="guide-left">
-              <div class="guide-left-header">Guide</div>
-              <div v-for="row in guideRows" :key="row.name" class="guide-left-row">
-                {{ row.name }}
+          <div class="panel-tabs">
+            <button
+              class="tab-button"
+              :class="{ active: activePanel === 'chat' }"
+              type="button"
+              @click="activePanel = 'chat'"
+            >
+              Chat
+            </button>
+            <button
+              class="tab-button"
+              :class="{ active: activePanel === 'controls' }"
+              type="button"
+              @click="activePanel = 'controls'"
+            >
+              Controls
+            </button>
+          </div>
+
+          <div v-if="activePanel === 'controls'" class="panel-section">
+            <div class="controls-row">
+              <button class="dial" type="button" @click="prevChannel">CH -</button>
+              <button class="dial" type="button" @click="nextChannel">CH +</button>
+            </div>
+
+            <div class="controls-row">
+              <button class="toggle" :class="{ active: isOn }" type="button" @click="togglePower">
+                Power
+              </button>
+              <button class="toggle" type="button" @click="toggleMute">
+                {{ isMuted ? 'Unmute' : 'Mute' }}
+              </button>
+            </div>
+
+            <div class="volume-control">
+              <div class="volume-header">
+                <span class="volume-label">Volume</span>
+                <span class="volume-value">{{ volumeDisplay }}</span>
+              </div>
+              <input
+                class="volume-slider"
+                type="range"
+                min="0"
+                :max="maxVolumePercent"
+                step="1"
+                v-model.number="volumePercent"
+                :disabled="!playerReady || !isOn"
+                @input="handleVolumeInput"
+              />
+              <div class="volume-scale">
+                <span>0%</span>
+                <span>50%</span>
+                <span>100%</span>
               </div>
             </div>
-            <div class="guide-scroll">
-              <div class="guide-header">
-                <div
-                  v-for="(segment, index) in guideHeaderSegments"
-                  :key="`${segment.label}-${index}`"
-                  class="guide-hour"
-                  :style="{
-                    width: `${(segment.durationSeconds / 3600) * hourWidth}px`,
-                    flex: `0 0 ${(segment.durationSeconds / 3600) * hourWidth}px`
-                  }"
-                >
-                  {{ segment.label }}
+
+            <div class="guide">
+              <div class="guide-left">
+                <div class="guide-left-header">Guide</div>
+                <div v-for="row in guideRows" :key="row.name" class="guide-left-row">
+                  {{ row.name }}
                 </div>
               </div>
-              <div v-for="row in guideRows" :key="`${row.name}-blocks`" class="guide-row">
-                <div
-                  v-for="(block, index) in row.blocks"
-                  :key="`${row.name}-${index}`"
-                  class="guide-block"
-                  :style="{
-                    width: `${(block.durationSeconds / 3600) * hourWidth}px`,
-                    flex: `0 0 ${(block.durationSeconds / 3600) * hourWidth}px`
-                  }"
-                  :title="`${block.title} • ${formatLocalTimeFromGuide(block.startOffsetSeconds)} - ${formatLocalTimeFromGuide(block.startOffsetSeconds + block.durationSeconds)}`"
-                >
-                  <span class="guide-title">{{ block.title }}</span>
+              <div class="guide-scroll">
+                <div class="guide-header">
+                  <div
+                    v-for="(segment, index) in guideHeaderSegments"
+                    :key="`${segment.label}-${index}`"
+                    class="guide-hour"
+                    :style="{
+                      width: `${(segment.durationSeconds / 3600) * hourWidth}px`,
+                      flex: `0 0 ${(segment.durationSeconds / 3600) * hourWidth}px`
+                    }"
+                  >
+                    {{ segment.label }}
+                  </div>
+                </div>
+                <div v-for="row in guideRows" :key="`${row.name}-blocks`" class="guide-row">
+                  <div
+                    v-for="(block, index) in row.blocks"
+                    :key="`${row.name}-${index}`"
+                    class="guide-block"
+                    :style="{
+                      width: `${(block.durationSeconds / 3600) * hourWidth}px`,
+                      flex: `0 0 ${(block.durationSeconds / 3600) * hourWidth}px`
+                    }"
+                    :title="`${block.title} • ${formatLocalTimeFromGuide(block.startOffsetSeconds)} - ${formatLocalTimeFromGuide(block.startOffsetSeconds + block.durationSeconds)}`"
+                  >
+                    <span class="guide-title">{{ block.title }}</span>
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
+
+          <div v-else class="panel-section chat-panel">
+            <div ref="chatLogRef" class="chat-log">
+              <div
+                v-for="message in currentChatMessages"
+                :key="message.id"
+                class="chat-message"
+                :class="{ system: message.kind === 'system' }"
+              >
+                <span v-if="message.kind !== 'system'" class="chat-user">{{ message.username }}</span>
+                <span class="chat-text">{{ message.text }}</span>
+              </div>
+            </div>
+
+            <div v-if="!isChatAuthorized" class="chat-auth">
+              <p>Sign in with Discord to chat.</p>
+              <a class="secondary" href="/api/auth/discord/login?redirect=/&scope=chat">
+                Sign in with Discord
+              </a>
+            </div>
+
+            <form class="chat-input" @submit.prevent="sendChatMessage">
+              <input
+                v-model.trim="chatInput"
+                type="text"
+                placeholder="Type a message"
+                :disabled="!isChatAuthorized"
+              />
+              <button class="secondary" type="submit" :disabled="!isChatAuthorized || !chatInput.trim()">
+                Send
+              </button>
+            </form>
           </div>
         </div>
       </aside>
@@ -154,7 +209,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
@@ -212,6 +267,13 @@ const supportSlot = ref(null)
 const hasLoadedChannel = ref(false)
 const viewerCounts = ref({ total: 0, channels: {} })
 const viewerId = ref(null)
+const activePanel = ref('chat')
+const { data: authData } = await useFetch('/api/auth/me')
+const isChatAuthorized = computed(() => authData.value?.authenticated)
+const chatUsername = computed(() => authData.value?.user?.username || '')
+const chatMessagesByChannel = ref({})
+const chatInput = ref('')
+const chatLogRef = ref(null)
 
 let player = null
 let clockInterval = null
@@ -233,6 +295,11 @@ const channelViewers = computed(() => {
   const slug = activeChannelSlug.value
   if (!slug) return 0
   return viewerCounts.value?.channels?.[slug] || 0
+})
+const currentChatMessages = computed(() => {
+  const slug = activeChannelSlug.value
+  if (!slug) return []
+  return getChannelMessages(slug)
 })
 
 const scheduleInfo = computed(() => {
@@ -498,10 +565,25 @@ function handleViewerMessage(event) {
   } catch (error) {
     data = null
   }
-  if (!data || data.type !== 'counts') return
-  const total = Number(data.total) || 0
-  const channels = data.channels && typeof data.channels === 'object' ? data.channels : {}
-  viewerCounts.value = { total, channels }
+  if (!data || typeof data.type !== 'string') return
+  if (data.type === 'counts') {
+    const total = Number(data.total) || 0
+    const channels = data.channels && typeof data.channels === 'object' ? data.channels : {}
+    viewerCounts.value = { total, channels }
+    return
+  }
+  if (data.type === 'chat') {
+    addChatMessage(data)
+  }
+  if (data.type === 'chat_error') {
+    addChatMessage({
+      channel: activeChannelSlug.value,
+      kind: 'system',
+      username: 'System',
+      text: data.message || 'Unable to send message.',
+      at: Date.now()
+    })
+  }
 }
 
 function sendViewerMessage(type, payload) {
@@ -571,6 +653,47 @@ function connectViewerSocket() {
   })
 }
 
+function getChannelMessages(channel) {
+  if (!chatMessagesByChannel.value[channel]) {
+    chatMessagesByChannel.value[channel] = []
+  }
+  return chatMessagesByChannel.value[channel]
+}
+
+function addChatMessage(payload) {
+  const channel = payload?.channel || activeChannelSlug.value
+  if (!channel) return
+  const messages = getChannelMessages(channel)
+  messages.push({
+    id: payload?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    username: payload?.username || '',
+    text: payload?.text || '',
+    kind: payload?.kind || 'user',
+    at: payload?.at || Date.now()
+  })
+  if (messages.length > 200) {
+    messages.splice(0, messages.length - 200)
+  }
+  if (channel === activeChannelSlug.value) {
+    nextTick(() => {
+      if (chatLogRef.value) {
+        chatLogRef.value.scrollTop = chatLogRef.value.scrollHeight
+      }
+    })
+  }
+}
+
+function sendChatMessage() {
+  const text = chatInput.value.trim()
+  if (!text || !activeChannelSlug.value) return
+  if (!isChatAuthorized.value) return
+  sendViewerMessage('chat', {
+    channel: activeChannelSlug.value,
+    text
+  })
+  chatInput.value = ''
+}
+
 watch(activeChannelSlug, (slug, prev) => {
   if (!slug || slug === prev) return
   if (!viewerId.value) return
@@ -579,6 +702,11 @@ watch(activeChannelSlug, (slug, prev) => {
   } else {
     pendingChannelSlug.value = slug
   }
+  nextTick(() => {
+    if (chatLogRef.value) {
+      chatLogRef.value.scrollTop = chatLogRef.value.scrollHeight
+    }
+  })
 })
 
 function setChannel(index) {
@@ -939,45 +1067,6 @@ onBeforeUnmount(() => {
   color: #fdf0c2;
 }
 
-.viewer-stats {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-}
-
-.viewer-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  min-width: 110px;
-  padding: 6px 12px;
-  border-radius: 10px;
-  border: 1px solid #a88c5a;
-  background: rgba(21, 22, 27, 0.7);
-  font-family: 'VT323', monospace;
-}
-
-.viewer-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  color: #d7c7a4;
-}
-
-.viewer-value {
-  font-size: 24px;
-  color: #fdf0c2;
-}
-
-.viewer-sub {
-  font-size: 12px;
-  color: #bfa981;
-  max-width: 140px;
-  text-align: center;
-}
 
 .tv-layout {
   display: grid;
@@ -993,12 +1082,13 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 100%;
   min-width: 0;
+  align-self: start;
 }
 
 .bezel {
   width: 100%;
   max-width: min(980px, 100%);
-  flex: 1;
+  flex: 0 0 auto;
   background: linear-gradient(135deg, #4b2f1b, #7a5630 40%, #3a2412 100%);
   border-radius: clamp(18px, 4vw, 32px);
   padding: clamp(14px, 3vw, 22px);
@@ -1159,6 +1249,15 @@ onBeforeUnmount(() => {
   display: flex;
   width: 100%;
   min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ad-banner {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
 }
 
 .panel {
@@ -1203,6 +1302,181 @@ onBeforeUnmount(() => {
   font-size: 16px;
   margin-top: 4px;
   color: #f3e0b8;
+}
+
+.viewer-counts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.viewer-count {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(124, 104, 69, 0.6);
+  display: grid;
+  gap: 4px;
+}
+
+.viewer-count .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #cbb78f;
+}
+
+.viewer-count strong {
+  font-size: 20px;
+  color: #fdf0c2;
+}
+
+.panel-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.tab-button {
+  border-radius: 10px;
+  border: 1px solid rgba(124, 104, 69, 0.6);
+  background: rgba(0, 0, 0, 0.2);
+  color: #f7e4b4;
+  padding: 8px 10px;
+  font-family: 'Orbitron', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tab-button.active {
+  border-color: #f9d98f;
+  color: #f9d98f;
+  background: rgba(249, 217, 143, 0.12);
+}
+
+.panel-section {
+  display: grid;
+  gap: 12px;
+  border: 1px dashed rgba(124, 104, 69, 0.6);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 12px;
+}
+
+.chat-panel {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-log {
+  flex: 1;
+  height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.chat-message {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+  font-family: 'VT323', monospace;
+  color: #f7f0d8;
+}
+
+.chat-message.system {
+  font-style: italic;
+  color: #bfa981;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-user {
+  font-size: 14px;
+  color: #f9d98f;
+  white-space: nowrap;
+}
+
+.chat-text {
+  font-size: 16px;
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.chat-message.system .chat-user {
+  display: none;
+}
+
+.chat-message.system .chat-text {
+  grid-column: 1 / -1;
+}
+
+.chat-auth {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(124, 104, 69, 0.6);
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  color: #cbb78f;
+}
+
+.chat-auth a {
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #a88c5a;
+  color: #f7f0d8;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+}
+
+.chat-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.chat-input input {
+  border-radius: 10px;
+  border: 1px solid rgba(124, 104, 69, 0.6);
+  background: rgba(0, 0, 0, 0.3);
+  color: #f7f0d8;
+  padding: 8px 10px;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+}
+
+.chat-input button {
+  border-radius: 10px;
+  border: 1px solid rgba(124, 104, 69, 0.6);
+  background: rgba(249, 217, 143, 0.12);
+  color: #f9d98f;
+  padding: 8px 14px;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.chat-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .controls-row {

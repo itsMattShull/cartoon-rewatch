@@ -126,7 +126,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const { data: authData } = await useFetch('/api/auth/me')
-const isAuthorized = computed(() => authData.value?.authenticated)
+const isAuthorized = computed(() => authData.value?.authenticated && authData.value?.allowed)
 
 const rangeOptions = [
   { value: '1m', label: 'Last 1 Month' },

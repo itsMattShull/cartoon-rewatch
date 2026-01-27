@@ -50,7 +50,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const user = await userResponse.json()
-  if (!isAllowedUser(user.id)) {
+  const scopeCookie = getCookie(event, 'discord_oauth_scope')
+  const isChatScope = scopeCookie === 'chat'
+  if (!isChatScope && !isAllowedUser(user.id)) {
     throw createError({ statusCode: 403, statusMessage: 'Not authorized' })
   }
 
@@ -65,6 +67,9 @@ export default defineEventHandler(async (event) => {
     maxAge: 60 * 60 * 24 * 7
   })
 
+  const redirectCookie = getCookie(event, 'discord_oauth_redirect')
+  const safeRedirect = redirectCookie && redirectCookie.startsWith('/') ? redirectCookie : '/admin'
+
   setCookie(event, 'discord_oauth_state', '', {
     httpOnly: true,
     sameSite: 'lax',
@@ -73,5 +78,21 @@ export default defineEventHandler(async (event) => {
     maxAge: 0
   })
 
-  return sendRedirect(event, '/admin')
+  setCookie(event, 'discord_oauth_redirect', '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0
+  })
+
+  setCookie(event, 'discord_oauth_scope', '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0
+  })
+
+  return sendRedirect(event, safeRedirect)
 })

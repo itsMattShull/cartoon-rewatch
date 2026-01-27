@@ -1,6 +1,7 @@
 import { defineWebSocketHandler } from 'h3'
 import { recordChannelView, recordVisit } from '../utils/analytics'
 import { normalizeChannelSlug } from '../utils/channels'
+import { getSessionCookieName, verifySession } from '../utils/auth'
 
 const globalState = globalThis.__crt80_viewers || {
   peers: new Map(),
@@ -11,6 +12,35 @@ globalThis.__crt80_viewers = globalState
 const peers = globalState.peers
 const sockets = globalState.sockets
 
+const MAX_CHAT_LENGTH = 400
+
+function getCookieHeader(peer) {
+  const headers = peer?.request?.headers
+  if (!headers) return ''
+  if (typeof headers.get === 'function') {
+    return headers.get('cookie') || ''
+  }
+  if (typeof headers.cookie === 'string') return headers.cookie
+  return ''
+}
+
+function parseCookies(header) {
+  if (!header) return {}
+  return header.split(';').reduce((acc, part) => {
+    const [key, ...rest] = part.trim().split('=')
+    if (!key) return acc
+    acc[key] = decodeURIComponent(rest.join('='))
+    return acc
+  }, {})
+}
+
+function getSessionFromPeer(peer) {
+  const header = getCookieHeader(peer)
+  const cookies = parseCookies(header)
+  const token = cookies[getSessionCookieName()]
+  return verifySession(token)
+}
+
 function normalizeViewerId(value, fallback) {
   if (typeof value === 'string') {
     const trimmed = value.trim()
@@ -19,8 +49,8 @@ function normalizeViewerId(value, fallback) {
   return fallback || null
 }
 
-function updatePeer(peer, viewerId, channel, hasHello = false) {
-  peers.set(peer.id, { viewerId, channel, hasHello })
+function updatePeer(peer, viewerId, channel, hasHello = false, username = null, userId = null) {
+  peers.set(peer.id, { viewerId, channel, hasHello, username, userId })
 }
 
 function buildCounts() {
@@ -65,10 +95,26 @@ function broadcastCounts(peer) {
   }
 }
 
+function broadcastChat(channel, payload) {
+  if (!channel) return
+  const message = JSON.stringify(payload)
+  for (const socket of sockets) {
+    const state = peers.get(socket.id)
+    if (state?.channel !== channel) continue
+    socket.send(message)
+  }
+}
+
+function normalizeChatText(input) {
+  if (typeof input !== 'string') return ''
+  return input.trim().slice(0, MAX_CHAT_LENGTH)
+}
+
 export default defineWebSocketHandler({
   open(peer) {
     sockets.add(peer)
-    updatePeer(peer, peer.id, null, false)
+    const session = getSessionFromPeer(peer)
+    updatePeer(peer, peer.id, null, false, session?.username || null, session?.id || null)
     broadcastCounts(peer)
     peer.send(JSON.stringify({ type: 'ack', event: 'open' }))
   },
@@ -84,15 +130,17 @@ export default defineWebSocketHandler({
     if (!payload || typeof payload !== 'object') return
 
     const type = payload.type
-    if (type !== 'hello' && type !== 'channel') return
+    if (type !== 'hello' && type !== 'channel' && type !== 'chat') return
 
     const viewerId = normalizeViewerId(payload.viewerId, peer.id)
     const channel = normalizeChannelSlug(payload.channel)
     const existing = peers.get(peer.id)
     const previousChannel = existing?.channel
     const hasHello = existing?.hasHello === true
+    const username = existing?.username || null
+    const userId = existing?.userId || null
 
-    updatePeer(peer, viewerId, channel || null, hasHello || type === 'hello')
+    updatePeer(peer, viewerId, channel || null, hasHello || type === 'hello', username, userId)
 
     if (type === 'hello' && !hasHello) {
       recordVisit({ viewerId, channelSlug: channel }).catch((error) => {
@@ -102,6 +150,39 @@ export default defineWebSocketHandler({
       recordChannelView({ viewerId, channelSlug: channel }).catch((error) => {
         console.error('Analytics channel update failed', error)
       })
+    }
+
+    if (type === 'chat') {
+      const text = normalizeChatText(payload.text)
+      if (!text) return
+      if (!username) {
+        peer.send(JSON.stringify({ type: 'chat_error', message: 'Sign in required to chat.' }))
+        return
+      }
+      broadcastChat(channel, {
+        type: 'chat',
+        channel,
+        username,
+        text,
+        kind: 'user',
+        at: Date.now()
+      })
+      return
+    }
+
+    if (channel && username) {
+      const shouldAnnounceJoin =
+        (type === 'hello' && !hasHello) || (type === 'channel' && channel !== previousChannel)
+      if (shouldAnnounceJoin) {
+        broadcastChat(channel, {
+          type: 'chat',
+          channel,
+          username,
+          text: `${username} joined the chat`,
+          kind: 'system',
+          at: Date.now()
+        })
+      }
     }
 
     peer.send(
