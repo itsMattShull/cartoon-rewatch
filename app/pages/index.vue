@@ -1719,7 +1719,7 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .page {
     padding: 16px;
   }
