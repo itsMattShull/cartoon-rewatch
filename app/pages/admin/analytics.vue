@@ -7,7 +7,7 @@
         <p>Track viewers, visits, and returning audience trends.</p>
       </div>
       <div class="analytics-actions">
-        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
+        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login?redirect=/admin">
           Sign in with Discord
         </a>
         <button v-if="isAuthorized" class="secondary" type="button" @click="loadAnalytics">
@@ -117,7 +117,7 @@
     <section v-else class="locked">
       <h2>Sign in required</h2>
       <p>Only approved Discord accounts can access analytics.</p>
-      <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
+      <a class="primary" href="/api/auth/discord/login?redirect=/admin">Sign in with Discord</a>
     </section>
   </div>
 </template>
@@ -324,6 +324,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @import url('https://fonts.googleapis.com/css2?family=VT323&family=Orbitron:wght@400;600&display=swap');
+
+:global(html),
+:global(body) {
+  margin: 0;
+  padding: 0;
+  background: #070707;
+}
 
 :global(*),
 :global(*::before),

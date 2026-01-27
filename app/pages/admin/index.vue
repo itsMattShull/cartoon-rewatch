@@ -7,7 +7,7 @@
         <p>Manage block playlists and set which block is active on each channel.</p>
       </div>
       <div class="blocks-actions">
-        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
+        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login?redirect=/admin">
           Sign in with Discord
         </a>
         <button v-if="isAuthorized" class="primary" type="button" @click="openCreateChannel">
@@ -135,7 +135,7 @@
     <section v-else class="locked">
       <h2>Sign in required</h2>
       <p>Only approved Discord accounts can access Blocks.</p>
-      <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
+      <a class="primary" href="/api/auth/discord/login?redirect=/admin">Sign in with Discord</a>
     </section>
 
     <div v-if="isModalOpen" class="modal-overlay" @click.self="closeModal">

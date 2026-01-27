@@ -7,7 +7,7 @@
         <p>Create or update blocks, then save them to JSON files.</p>
       </div>
       <div class="maker-actions">
-        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login">
+        <a v-if="!isAuthorized" class="secondary" href="/api/auth/discord/login?redirect=/admin">
           Sign in with Discord
         </a>
         <a class="secondary" href="/admin">Back to Admin</a>
@@ -173,7 +173,7 @@
     <section v-else class="locked">
       <h2>Sign in required</h2>
       <p>Only approved Discord accounts can access the Block Maker.</p>
-      <a class="primary" href="/api/auth/discord/login">Sign in with Discord</a>
+      <a class="primary" href="/api/auth/discord/login?redirect=/admin">Sign in with Discord</a>
     </section>
 
     <div v-if="isPreviewOpen" class="preview-overlay" @click.self="closePreview">
