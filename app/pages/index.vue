@@ -64,6 +64,11 @@
             </div>
           </div>
 
+          <div class="controls-row">
+            <button class="dial" type="button" @click="prevChannel">CH -</button>
+            <button class="dial" type="button" @click="nextChannel">CH +</button>
+          </div>
+
           <div class="viewer-counts">
             <div class="viewer-count">
               <span class="label">Total Viewers</span>
@@ -95,11 +100,6 @@
           </div>
 
           <div v-if="activePanel === 'controls'" class="panel-section">
-            <div class="controls-row">
-              <button class="dial" type="button" @click="prevChannel">CH -</button>
-              <button class="dial" type="button" @click="nextChannel">CH +</button>
-            </div>
-
             <div class="controls-row">
               <button class="toggle" :class="{ active: isOn }" type="button" @click="togglePower">
                 Power
