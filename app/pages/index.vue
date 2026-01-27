@@ -274,6 +274,7 @@ const chatUsername = computed(() => authData.value?.user?.username || '')
 const chatMessagesByChannel = ref({})
 const chatInput = ref('')
 const chatLogRef = ref(null)
+const pageSessionId = ref(null)
 
 let player = null
 let clockInterval = null
@@ -311,7 +312,7 @@ const scheduleInfo = computed(() => {
       : null
   }
 
-  const seconds = getSecondsSinceMidnightInZone(now.value, scheduleTimeZone)
+  const seconds = getSecondsSinceWeekStartInZone(now.value, scheduleTimeZone)
   const position = seconds % channel.totalDuration
 
   let cursor = 0
@@ -388,7 +389,7 @@ useHead({
   ]
 })
 const guideHeaderSegments = computed(() => {
-  const startSeconds = getSecondsSinceMidnightInZone(guideStart.value, scheduleTimeZone)
+  const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone)
   const minuteOfHour = Math.floor((startSeconds % 3600) / 60)
   const windowSeconds = guideHours * 3600
   const segments = []
@@ -410,7 +411,7 @@ const guideHeaderSegments = computed(() => {
   return segments
 })
 const guideRows = computed(() => {
-  const startSeconds = getSecondsSinceMidnightInZone(guideStart.value, scheduleTimeZone)
+  const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone)
   const windowSeconds = guideHours * 3600
   return channels.value.map((channel) => ({
     name: channel.name,
@@ -447,10 +448,16 @@ function getTimeZoneOffsetMs(date, timeZone) {
   return asUTC - date.getTime()
 }
 
-function getSecondsSinceMidnightInZone(date, timeZone) {
+function getSecondsSinceWeekStartInZone(date, timeZone) {
   const offset = getTimeZoneOffsetMs(date, timeZone)
   const zoned = new Date(date.getTime() + offset)
-  return zoned.getUTCHours() * 3600 + zoned.getUTCMinutes() * 60 + zoned.getUTCSeconds()
+  const dayOfWeek = zoned.getUTCDay()
+  return (
+    dayOfWeek * 86400 +
+    zoned.getUTCHours() * 3600 +
+    zoned.getUTCMinutes() * 60 +
+    zoned.getUTCSeconds()
+  )
 }
 
 function getZoneMinuteStart(date, timeZone) {
@@ -541,6 +548,13 @@ function createViewerId() {
   return `v-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function createPageSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function getOrCreateViewerId() {
   if (typeof window === 'undefined') return null
   let id = window.localStorage.getItem(viewerStorageKey)
@@ -549,6 +563,14 @@ function getOrCreateViewerId() {
     window.localStorage.setItem(viewerStorageKey, id)
   }
   return id
+}
+
+function getOrCreatePageSessionId() {
+  if (typeof window === 'undefined') return null
+  if (!window.__crt80_pageSessionId) {
+    window.__crt80_pageSessionId = createPageSessionId()
+  }
+  return window.__crt80_pageSessionId
 }
 
 function getViewerSocketUrl() {
@@ -615,7 +637,8 @@ function connectViewerSocket() {
     viewerReconnectDelay = 1000
     sendViewerMessage('hello', {
       viewerId: viewerId.value,
-      channel: activeChannelSlug.value || null
+      channel: activeChannelSlug.value || null,
+      sessionId: pageSessionId.value
     })
     if (viewerHelloTimer) {
       window.clearTimeout(viewerHelloTimer)
@@ -623,11 +646,16 @@ function connectViewerSocket() {
     viewerHelloTimer = window.setTimeout(() => {
       sendViewerMessage('hello', {
         viewerId: viewerId.value,
-        channel: activeChannelSlug.value || null
+        channel: activeChannelSlug.value || null,
+        sessionId: pageSessionId.value
       })
     }, 800)
     if (pendingChannelSlug.value) {
-      sendViewerMessage('channel', { viewerId: viewerId.value, channel: pendingChannelSlug.value })
+      sendViewerMessage('channel', {
+        viewerId: viewerId.value,
+        channel: pendingChannelSlug.value,
+        sessionId: pageSessionId.value
+      })
       pendingChannelSlug.value = ''
     }
   })
@@ -689,7 +717,8 @@ function sendChatMessage() {
   if (!isChatAuthorized.value) return
   sendViewerMessage('chat', {
     channel: activeChannelSlug.value,
-    text
+    text,
+    sessionId: pageSessionId.value
   })
   chatInput.value = ''
 }
@@ -698,7 +727,7 @@ watch(activeChannelSlug, (slug, prev) => {
   if (!slug || slug === prev) return
   if (!viewerId.value) return
   if (viewerSocket && viewerSocket.readyState === WebSocket.OPEN) {
-    sendViewerMessage('channel', { viewerId: viewerId.value, channel: slug })
+    sendViewerMessage('channel', { viewerId: viewerId.value, channel: slug, sessionId: pageSessionId.value })
   } else {
     pendingChannelSlug.value = slug
   }
@@ -951,6 +980,7 @@ onMounted(async () => {
     }
   }
   viewerId.value = getOrCreateViewerId()
+  pageSessionId.value = getOrCreatePageSessionId()
   hasLoadedChannel.value = true
   injectSupportButton()
   clockInterval = window.setInterval(() => {

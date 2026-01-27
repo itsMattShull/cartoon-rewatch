@@ -11,8 +11,17 @@ globalThis.__crt80_viewers = globalState
 
 const peers = globalState.peers
 const sockets = globalState.sockets
+const visitDedup = globalState.visitDedup || new Map()
+globalState.visitDedup = visitDedup
+const joinAnnouncements = globalState.joinAnnouncements || new Map()
+globalState.joinAnnouncements = joinAnnouncements
+const joinCleanupState = globalState.joinCleanupState || { last: 0 }
+globalState.joinCleanupState = joinCleanupState
 
 const MAX_CHAT_LENGTH = 400
+const JOIN_ANNOUNCE_COOLDOWN_MS = 60 * 60 * 1000
+const VISIT_DEDUP_TTL_MS = 2 * 24 * 60 * 60 * 1000
+const ANALYTICS_TIME_ZONE = 'America/Chicago'
 
 function getCookieHeader(peer) {
   const headers = peer?.request?.headers
@@ -49,8 +58,16 @@ function normalizeViewerId(value, fallback) {
   return fallback || null
 }
 
-function updatePeer(peer, viewerId, channel, hasHello = false, username = null, userId = null) {
-  peers.set(peer.id, { viewerId, channel, hasHello, username, userId })
+function updatePeer(
+  peer,
+  viewerId,
+  channel,
+  hasHello = false,
+  username = null,
+  userId = null,
+  sessionId = null
+) {
+  peers.set(peer.id, { viewerId, channel, hasHello, username, userId, sessionId })
 }
 
 function buildCounts() {
@@ -105,16 +122,81 @@ function broadcastChat(channel, payload) {
   }
 }
 
+function shouldBroadcastJoin(viewerId, channel) {
+  if (!viewerId || !channel) return false
+  const key = `${viewerId}:${channel}`
+  const now = Date.now()
+  cleanupJoinAnnouncements(now)
+  const last = joinAnnouncements.get(key) || 0
+  if (now - last < JOIN_ANNOUNCE_COOLDOWN_MS) {
+    return false
+  }
+  joinAnnouncements.set(key, now)
+  return true
+}
+
 function normalizeChatText(input) {
   if (typeof input !== 'string') return ''
   return input.trim().slice(0, MAX_CHAT_LENGTH)
+}
+
+function getDateKeyInZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date)
+  const values = {}
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value
+  }
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+function cleanupVisitDedup(now) {
+  for (const [key, timestamp] of visitDedup.entries()) {
+    if (now - timestamp > VISIT_DEDUP_TTL_MS) {
+      visitDedup.delete(key)
+    }
+  }
+}
+
+function cleanupJoinAnnouncements(now) {
+  if (now - joinCleanupState.last < JOIN_ANNOUNCE_COOLDOWN_MS) return
+  joinCleanupState.last = now
+  for (const [key, timestamp] of joinAnnouncements.entries()) {
+    if (now - timestamp > JOIN_ANNOUNCE_COOLDOWN_MS) {
+      joinAnnouncements.delete(key)
+    }
+  }
+}
+
+function shouldCountVisit(viewerId, sessionId, dateKey) {
+  if (!viewerId || !sessionId || !dateKey) return false
+  const key = `visit:${viewerId}:${sessionId}:${dateKey}`
+  const now = Date.now()
+  cleanupVisitDedup(now)
+  if (visitDedup.has(key)) return false
+  visitDedup.set(key, now)
+  return true
+}
+
+function shouldCountChannelView(viewerId, sessionId, dateKey, channel) {
+  if (!viewerId || !sessionId || !dateKey || !channel) return false
+  const key = `channel:${viewerId}:${sessionId}:${channel}:${dateKey}`
+  const now = Date.now()
+  cleanupVisitDedup(now)
+  if (visitDedup.has(key)) return false
+  visitDedup.set(key, now)
+  return true
 }
 
 export default defineWebSocketHandler({
   open(peer) {
     sockets.add(peer)
     const session = getSessionFromPeer(peer)
-    updatePeer(peer, peer.id, null, false, session?.username || null, session?.id || null)
+    updatePeer(peer, peer.id, null, false, session?.username || null, session?.id || null, null)
     broadcastCounts(peer)
     peer.send(JSON.stringify({ type: 'ack', event: 'open' }))
   },
@@ -139,17 +221,27 @@ export default defineWebSocketHandler({
     const hasHello = existing?.hasHello === true
     const username = existing?.username || null
     const userId = existing?.userId || null
+    const sessionId =
+      typeof payload.sessionId === 'string' && payload.sessionId.trim()
+        ? payload.sessionId.trim()
+        : existing?.sessionId || null
 
-    updatePeer(peer, viewerId, channel || null, hasHello || type === 'hello', username, userId)
+    updatePeer(peer, viewerId, channel || null, hasHello || type === 'hello', username, userId, sessionId)
 
     if (type === 'hello' && !hasHello) {
-      recordVisit({ viewerId, channelSlug: channel }).catch((error) => {
-        console.error('Analytics visit update failed', error)
-      })
+      const dateKey = getDateKeyInZone(new Date(), ANALYTICS_TIME_ZONE)
+      if (shouldCountVisit(viewerId, sessionId, dateKey)) {
+        recordVisit({ viewerId, channelSlug: channel }).catch((error) => {
+          console.error('Analytics visit update failed', error)
+        })
+      }
     } else if (type === 'channel' && channel && channel !== previousChannel) {
-      recordChannelView({ viewerId, channelSlug: channel }).catch((error) => {
-        console.error('Analytics channel update failed', error)
-      })
+      const dateKey = getDateKeyInZone(new Date(), ANALYTICS_TIME_ZONE)
+      if (shouldCountChannelView(viewerId, sessionId, dateKey, channel)) {
+        recordChannelView({ viewerId, channelSlug: channel }).catch((error) => {
+          console.error('Analytics channel update failed', error)
+        })
+      }
     }
 
     if (type === 'chat') {
@@ -173,7 +265,7 @@ export default defineWebSocketHandler({
     if (channel && username) {
       const shouldAnnounceJoin =
         (type === 'hello' && !hasHello) || (type === 'channel' && channel !== previousChannel)
-      if (shouldAnnounceJoin) {
+      if (shouldAnnounceJoin && shouldBroadcastJoin(viewerId, channel)) {
         broadcastChat(channel, {
           type: 'chat',
           channel,
