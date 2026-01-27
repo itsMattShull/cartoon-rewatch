@@ -877,6 +877,9 @@ function createPlayer() {
 }
 
 function syncPlayerSize() {
+  if (window.matchMedia && window.matchMedia('(min-width: 1201px)').matches) {
+    return
+  }
   if (!player || !screenInner.value || !player.setSize) return
   const rect = screenInner.value.getBoundingClientRect()
   if (rect.width <= 0 || rect.height <= 0) return
@@ -1126,6 +1129,7 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 100%;
   flex: 0 0 auto;
+  min-height: 0;
   background: linear-gradient(135deg, #4b2f1b, #7a5630 40%, #3a2412 100%);
   border-radius: clamp(18px, 4vw, 32px);
   padding: clamp(14px, 3vw, 22px);
@@ -1138,6 +1142,7 @@ onBeforeUnmount(() => {
   border-radius: clamp(12px, 3vw, 18px);
   padding: clamp(10px, 2.6vw, 18px);
   border: 2px solid #4f422c;
+  min-height: 0;
 }
 
 .screen-inner {
@@ -1147,19 +1152,20 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   overflow: hidden;
   background: radial-gradient(circle at center, #243f2e 0%, #0b0c0d 70%);
+  min-height: 0;
 }
 
 .player {
   position: absolute;
   inset: 0;
-  width: 100% !important;
-  height: 100% !important;
+  width: 100%;
+  height: 100%;
 }
 
 .player :deep(iframe),
 .player :deep(div) {
-  width: 100% !important;
-  height: 100% !important;
+  width: 100%;
+  height: 100%;
 }
 
 .screen-inner.off .player {
@@ -1225,6 +1231,73 @@ onBeforeUnmount(() => {
   color: #f9d98f;
   text-transform: uppercase;
   letter-spacing: 2px;
+}
+
+@media (min-width: 1201px) {
+  .tv-frame {
+    align-self: stretch;
+  }
+
+  .controls {
+    align-self: start;
+  }
+
+  .bezel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .screen {
+    flex: 1;
+    display: flex;
+  }
+
+  .screen-inner {
+    flex: 1;
+    height: 100%;
+    aspect-ratio: auto;
+  }
+
+  .player {
+    overflow: hidden;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .player :deep(iframe) {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100% !important;
+    height: auto !important;
+    min-width: 100%;
+    min-height: 100%;
+    max-width: none;
+    max-height: none;
+    transform: translate(-50%, -50%);
+  }
+
+  :global(iframe#yt-player),
+  :global(iframe.player) {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100% !important;
+    height: auto !important;
+    min-width: 100%;
+    min-height: 100%;
+    max-width: none;
+    max-height: none;
+    transform: translate(-50%, -50%);
+  }
+
+  .channel-banner {
+    margin-top: 12px;
+    margin-bottom: 0;
+    padding-top: 0;
+  }
 }
 
 .channel-name {
