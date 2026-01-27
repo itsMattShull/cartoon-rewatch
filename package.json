@@ -13,6 +13,7 @@
     "chart.js": "^4.4.4",
     "dotenv": "^17.2.3",
     "nuxt": "^4.3.0",
+    "obscenity": "^0.4.6",
     "vue": "^3.5.27",
     "vue-router": "^4.6.4",
     "youtubei.js": "^16.0.1"

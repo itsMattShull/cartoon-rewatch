@@ -2,6 +2,7 @@ import { defineWebSocketHandler } from 'h3'
 import { recordChannelView, recordVisit } from '../utils/analytics'
 import { normalizeChannelSlug } from '../utils/channels'
 import { getSessionCookieName, verifySession } from '../utils/auth'
+import { censorChatText } from '../utils/profanity'
 
 const globalState = globalThis.__crt80_viewers || {
   peers: new Map(),
@@ -245,16 +246,17 @@ export default defineWebSocketHandler({
     }
 
     if (type === 'chat') {
-      const text = normalizeChatText(payload.text)
+      const text = censorChatText(normalizeChatText(payload.text))
       if (!text) return
       if (!username) {
         peer.send(JSON.stringify({ type: 'chat_error', message: 'Sign in required to chat.' }))
         return
       }
+      const safeUsername = censorChatText(username)
       broadcastChat(channel, {
         type: 'chat',
         channel,
-        username,
+        username: safeUsername,
         text,
         kind: 'user',
         at: Date.now()
@@ -266,11 +268,12 @@ export default defineWebSocketHandler({
       const shouldAnnounceJoin =
         (type === 'hello' && !hasHello) || (type === 'channel' && channel !== previousChannel)
       if (shouldAnnounceJoin && shouldBroadcastJoin(viewerId, channel)) {
+        const safeUsername = censorChatText(username)
         broadcastChat(channel, {
           type: 'chat',
           channel,
-          username,
-          text: `${username} joined the chat`,
+          username: safeUsername,
+          text: censorChatText(`${username} joined the chat`),
           kind: 'system',
           at: Date.now()
         })

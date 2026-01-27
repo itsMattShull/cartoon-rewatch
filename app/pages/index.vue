@@ -1042,6 +1042,8 @@ onBeforeUnmount(() => {
   background: radial-gradient(circle at top, #2b2e35 0%, #101015 45%, #070707 100%);
   color: #f7f0d8;
   font-family: 'Orbitron', sans-serif;
+  --content-max: 1680px;
+  --controls-max: 480px;
 }
 
 .title-bar {
@@ -1051,6 +1053,9 @@ onBeforeUnmount(() => {
   gap: 16px;
   flex-wrap: wrap;
   max-width: 100%;
+  width: 100%;
+  margin-inline: auto;
+  max-width: var(--content-max);
   padding: 12px 18px;
   background: linear-gradient(90deg, #1f2024, #2f2b20 60%, #3b2b17);
   border: 2px solid #a88c5a;
@@ -1100,11 +1105,13 @@ onBeforeUnmount(() => {
 
 .tv-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, min(var(--controls-max), 35vw));
   gap: 24px;
   align-items: stretch;
   width: 100%;
   min-width: 0;
+  max-width: var(--content-max);
+  margin-inline: auto;
 }
 
 .tv-frame {
@@ -1117,7 +1124,7 @@ onBeforeUnmount(() => {
 
 .bezel {
   width: 100%;
-  max-width: min(980px, 100%);
+  max-width: 100%;
   flex: 0 0 auto;
   background: linear-gradient(135deg, #4b2f1b, #7a5630 40%, #3a2412 100%);
   border-radius: clamp(18px, 4vw, 32px);
@@ -1281,6 +1288,8 @@ onBeforeUnmount(() => {
   min-width: 0;
   flex-direction: column;
   gap: 14px;
+  max-width: var(--controls-max);
+  justify-self: end;
 }
 
 .ad-banner {
@@ -1721,6 +1730,8 @@ onBeforeUnmount(() => {
 
   .controls {
     order: 2;
+    max-width: 100%;
+    justify-self: stretch;
   }
 
   .bezel {
