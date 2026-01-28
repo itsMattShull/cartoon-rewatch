@@ -181,23 +181,145 @@ async function ensureChartLibrary() {
   return ChartLibrary
 }
 
-function buildChartConfig({ labels, data, label, color, yMax }) {
+function getTimeZoneOffsetMs(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(date)
+
+  const values = {}
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value
+  }
+
+  const asUTC = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  )
+
+  return asUTC - date.getTime()
+}
+
+function getZonedDateParts(date, timeZone) {
+  const offset = getTimeZoneOffsetMs(date, timeZone)
+  const zoned = new Date(date.getTime() + offset)
+  return {
+    year: zoned.getUTCFullYear(),
+    month: zoned.getUTCMonth() + 1,
+    day: zoned.getUTCDate(),
+    hour: zoned.getUTCHours(),
+    minute: zoned.getUTCMinutes(),
+    second: zoned.getUTCSeconds(),
+    weekday: zoned.getUTCDay()
+  }
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0')
+}
+
+function getCurrentBucketLabel(interval, timeZone, date = new Date()) {
+  const parts = getZonedDateParts(date, timeZone)
+  const dayKey = `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`
+  if (interval === 'monthly') {
+    return `${parts.year}-${pad2(parts.month)}`
+  }
+  if (interval === 'weekly') {
+    const weekStart = new Date(Date.UTC(parts.year, parts.month - 1, parts.day - parts.weekday))
+    return weekStart.toISOString().slice(0, 10)
+  }
+  return dayKey
+}
+
+function getProjectionFactor(interval, timeZone, date = new Date()) {
+  const parts = getZonedDateParts(date, timeZone)
+  const elapsedSeconds =
+    interval === 'weekly'
+      ? parts.weekday * 86400 + parts.hour * 3600 + parts.minute * 60 + parts.second
+      : interval === 'monthly'
+        ? (parts.day - 1) * 86400 + parts.hour * 3600 + parts.minute * 60 + parts.second
+        : parts.hour * 3600 + parts.minute * 60 + parts.second
+
+  let totalSeconds = 86400
+  if (interval === 'weekly') {
+    totalSeconds = 7 * 86400
+  } else if (interval === 'monthly') {
+    const daysInMonth = new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate()
+    totalSeconds = daysInMonth * 86400
+  }
+
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return 1
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return 1
+  return totalSeconds / elapsedSeconds
+}
+
+function applyProjection(series, labels, interval, timeZone, { precision = 0, clampMax = null } = {}) {
+  if (!Array.isArray(series) || !Array.isArray(labels) || !labels.length) return series
+  const lastIndex = labels.length - 1
+  if (lastIndex < 0 || series.length <= lastIndex) return series
+
+  const currentLabel = getCurrentBucketLabel(interval, timeZone)
+  if (labels[lastIndex] !== currentLabel) return series
+
+  const factor = getProjectionFactor(interval, timeZone)
+  if (!Number.isFinite(factor) || factor <= 1) return series
+
+  const currentValue = Number(series[lastIndex]) || 0
+  let projected = currentValue * factor
+  if (Number.isFinite(clampMax)) {
+    projected = Math.min(clampMax, projected)
+  }
+  const multiplier = Math.pow(10, precision)
+  projected = Math.round(projected * multiplier) / multiplier
+
+  const next = [...series]
+  next[lastIndex] = projected
+  return next
+}
+
+function buildChartConfig({ labels, data, projectedData, label, color, yMax }) {
+  const datasets = [
+    {
+      label,
+      data,
+      borderColor: color,
+      backgroundColor: `${color}33`,
+      fill: true,
+      tension: 0.25,
+      pointRadius: 2,
+      pointHoverRadius: 4
+    }
+  ]
+
+  if (Array.isArray(projectedData)) {
+    datasets.push({
+      label: `${label} (Projected)`,
+      data: projectedData,
+      borderColor: '#ffcf5a',
+      backgroundColor: 'transparent',
+      fill: false,
+      showLine: false,
+      pointRadius: 5,
+      pointHoverRadius: 6,
+      pointStyle: 'triangle'
+    })
+  }
+
   return {
     type: 'line',
     data: {
       labels,
-      datasets: [
-        {
-          label,
-          data,
-          borderColor: color,
-          backgroundColor: `${color}33`,
-          fill: true,
-          tension: 0.25,
-          pointRadius: 2,
-          pointHoverRadius: 4
-        }
-      ]
+      datasets
     },
     options: {
       responsive: true,
@@ -218,66 +340,99 @@ function buildChartConfig({ labels, data, label, color, yMax }) {
   }
 }
 
+function getProjectionPoint(series, labels, interval, timeZone, { precision = 0, clampMax = null } = {}) {
+  if (!Array.isArray(series) || !Array.isArray(labels) || !labels.length) return null
+  const lastIndex = labels.length - 1
+  if (lastIndex < 0 || series.length <= lastIndex) return null
+
+  const currentLabel = getCurrentBucketLabel(interval, timeZone)
+  if (labels[lastIndex] !== currentLabel) return null
+
+  const factor = getProjectionFactor(interval, timeZone)
+  if (!Number.isFinite(factor) || factor <= 1) return null
+
+  const currentValue = Number(series[lastIndex]) || 0
+  let projected = currentValue * factor
+  if (Number.isFinite(clampMax)) {
+    projected = Math.min(clampMax, projected)
+  }
+  const multiplier = Math.pow(10, precision)
+  projected = Math.round(projected * multiplier) / multiplier
+
+  return projected
+}
+
+function buildProjectionSeries(projectedValue, length) {
+  if (!Number.isFinite(projectedValue) || length <= 0) return null
+  const series = new Array(length).fill(null)
+  series[length - 1] = projectedValue
+  return series
+}
+
 async function renderCharts() {
   if (!import.meta.client || !analyticsData.value) return
   const labels = analyticsData.value?.series?.labels || []
-  const uniqueSeries = analyticsData.value?.series?.unique || []
+  const interval = analyticsData.value?.interval || selectedInterval.value
+  const zone = analyticsData.value?.timezone || timezone.value
+  const uniqueRaw = analyticsData.value?.series?.unique || []
+  const uniqueProjection = getProjectionPoint(uniqueRaw, labels, interval, zone)
+  const uniqueSeries = applyProjection(uniqueRaw, labels, interval, zone)
+  const uniqueProjectedSeries = buildProjectionSeries(uniqueProjection, labels.length)
   const returningSeries = analyticsData.value?.series?.returningPct || []
-  const viewsSeries = analyticsData.value?.series?.views || []
+  const viewsRaw = analyticsData.value?.series?.views || []
+  const viewsProjection = getProjectionPoint(viewsRaw, labels, interval, zone)
+  const viewsSeries = applyProjection(viewsRaw, labels, interval, zone)
+  const viewsProjectedSeries = buildProjectionSeries(viewsProjection, labels.length)
 
   const Chart = await ensureChartLibrary()
 
   if (uniqueCanvas.value) {
+    const uniqueConfig = buildChartConfig({
+      labels,
+      data: uniqueSeries,
+      projectedData: uniqueProjectedSeries,
+      label: 'Unique Viewers',
+      color: '#f9d98f'
+    })
     if (!uniqueChart) {
-      uniqueChart = new Chart(
-        uniqueCanvas.value,
-        buildChartConfig({
-          labels,
-          data: uniqueSeries,
-          label: 'Unique Viewers',
-          color: '#f9d98f'
-        })
-      )
+      uniqueChart = new Chart(uniqueCanvas.value, uniqueConfig)
     } else {
       uniqueChart.data.labels = labels
-      uniqueChart.data.datasets[0].data = uniqueSeries
+      uniqueChart.data.datasets = uniqueConfig.data.datasets
       uniqueChart.update()
     }
   }
 
   if (returningCanvas.value) {
+    const returningConfig = buildChartConfig({
+      labels,
+      data: returningSeries,
+      label: 'Returning %',
+      color: '#7fe3ff',
+      yMax: 100
+    })
     if (!returningChart) {
-      returningChart = new Chart(
-        returningCanvas.value,
-        buildChartConfig({
-          labels,
-          data: returningSeries,
-          label: 'Returning %',
-          color: '#7fe3ff',
-          yMax: 100
-        })
-      )
+      returningChart = new Chart(returningCanvas.value, returningConfig)
     } else {
       returningChart.data.labels = labels
-      returningChart.data.datasets[0].data = returningSeries
+      returningChart.data.datasets = returningConfig.data.datasets
       returningChart.update()
     }
   }
 
   if (viewsCanvas.value) {
+    const viewsConfig = buildChartConfig({
+      labels,
+      data: viewsSeries,
+      projectedData: viewsProjectedSeries,
+      label: 'Total Visits',
+      color: '#f7a8ff'
+    })
     if (!viewsChart) {
-      viewsChart = new Chart(
-        viewsCanvas.value,
-        buildChartConfig({
-          labels,
-          data: viewsSeries,
-          label: 'Total Visits',
-          color: '#f7a8ff'
-        })
-      )
+      viewsChart = new Chart(viewsCanvas.value, viewsConfig)
     } else {
       viewsChart.data.labels = labels
-      viewsChart.data.datasets[0].data = viewsSeries
+      viewsChart.data.datasets = viewsConfig.data.datasets
       viewsChart.update()
     }
   }
