@@ -272,10 +272,10 @@ function applyProjection(series, labels, interval, timeZone, { precision = 0, cl
   if (labels[lastIndex] !== currentLabel) return series
 
   const factor = getProjectionFactor(interval, timeZone)
-  if (!Number.isFinite(factor) || factor <= 1) return series
+  if (!Number.isFinite(factor) || factor <= 0) return series
 
   const currentValue = Number(series[lastIndex]) || 0
-  let projected = currentValue * factor
+  let projected = currentValue + currentValue * factor
   if (Number.isFinite(clampMax)) {
     projected = Math.min(clampMax, projected)
   }
@@ -349,10 +349,10 @@ function getProjectionPoint(series, labels, interval, timeZone, { precision = 0,
   if (labels[lastIndex] !== currentLabel) return null
 
   const factor = getProjectionFactor(interval, timeZone)
-  if (!Number.isFinite(factor) || factor <= 1) return null
+  if (!Number.isFinite(factor) || factor <= 0) return null
 
   const currentValue = Number(series[lastIndex]) || 0
-  let projected = currentValue * factor
+  let projected = currentValue + currentValue * factor
   if (Number.isFinite(clampMax)) {
     projected = Math.min(clampMax, projected)
   }
@@ -376,12 +376,12 @@ async function renderCharts() {
   const zone = analyticsData.value?.timezone || timezone.value
   const uniqueRaw = analyticsData.value?.series?.unique || []
   const uniqueProjection = getProjectionPoint(uniqueRaw, labels, interval, zone)
-  const uniqueSeries = applyProjection(uniqueRaw, labels, interval, zone)
+  const uniqueSeries = uniqueRaw
   const uniqueProjectedSeries = buildProjectionSeries(uniqueProjection, labels.length)
   const returningSeries = analyticsData.value?.series?.returningPct || []
   const viewsRaw = analyticsData.value?.series?.views || []
   const viewsProjection = getProjectionPoint(viewsRaw, labels, interval, zone)
-  const viewsSeries = applyProjection(viewsRaw, labels, interval, zone)
+  const viewsSeries = viewsRaw
   const viewsProjectedSeries = buildProjectionSeries(viewsProjection, labels.length)
 
   const Chart = await ensureChartLibrary()
