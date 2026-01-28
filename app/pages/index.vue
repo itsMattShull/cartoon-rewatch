@@ -365,6 +365,9 @@ const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone
 
 const requestUrl = useRequestURL()
 const canonicalUrl = computed(() => requestUrl.origin + requestUrl.pathname)
+const socialImageUrl = computed(() => `${requestUrl.origin}/logo.png`)
+const socialImageWidth = 1204
+const socialImageHeight = 623
 const pageTitle = 'Cartoon ReWatch — Live Cartoon Channel Player'
 const pageDescription =
   'Stream a nostalgic, always-on cartoon channel with classic blocks from Toonami, Adult Swim, Saturday Mornings, and more.'
@@ -381,9 +384,17 @@ useHead({
     { property: 'og:type', content: 'website' },
     { property: 'og:url', content: canonicalUrl.value },
     { property: 'og:site_name', content: 'Cartoon ReWatch' },
-    { name: 'twitter:card', content: 'summary' },
+    { name: 'twitter:card', content: 'summary_large_image' },
     { name: 'twitter:title', content: pageTitle },
-    { name: 'twitter:description', content: pageDescription }
+    { name: 'twitter:description', content: pageDescription },
+    { property: 'og:image', content: socialImageUrl.value },
+    { property: 'og:image:secure_url', content: socialImageUrl.value },
+    { property: 'og:image:width', content: String(socialImageWidth) },
+    { property: 'og:image:height', content: String(socialImageHeight) },
+    { property: 'og:image:type', content: 'image/png' },
+    { property: 'og:image:alt', content: 'Cartoon ReWatch logo' },
+    { name: 'twitter:image', content: socialImageUrl.value },
+    { name: 'twitter:image:alt', content: 'Cartoon ReWatch logo' }
   ],
   link: [{ rel: 'canonical', href: canonicalUrl.value }],
   script: [
