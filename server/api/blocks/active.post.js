@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
 import { getSessionFromEvent } from '../../utils/auth'
 import { getChannels } from '../../utils/channels'
+import { broadcastToViewers } from '../../utils/viewer-broadcast'
 
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
 
@@ -50,6 +51,12 @@ export default defineEventHandler(async (event) => {
 
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, JSON.stringify(mapping, null, 2))
+
+  broadcastToViewers({
+    type: 'active_update',
+    channels: { [channelSlug]: blockSlug || '' },
+    at: Date.now()
+  })
 
   return { ok: true, active: mapping }
 })

@@ -52,6 +52,7 @@
               <button class="secondary" type="button" @click="openEditChannel(channel)">
                 Edit
               </button>
+              <a class="secondary" :href="`/admin/schedule?channel=${channel.slug}`">Schedule</a>
               <button class="danger align-right" type="button" @click="confirmDeleteChannel(channel)">
                 Delete Channel
               </button>

@@ -54,7 +54,10 @@
         <a href="https://www.cartoonreorbit.com" target="_blank"><img class="ad-banner" src="/ad1.gif" alt="" loading="lazy" /></a>
         <div class="panel">
           <div class="panel-header">
-            {{ hasLoadedChannel ? activeChannel?.name ?? 'TV Controls' : 'Loading...' }}
+            <div class="panel-title">
+              <span>{{ hasLoadedChannel ? activeChannel?.name ?? 'TV Controls' : 'Loading...' }}</span>
+              <div><div class="viewer-inline">Total Viewers: {{ totalViewers }}</div><div class="viewer-inline">Channel Viewers: {{ channelViewers }}</div></div>
+            </div>
           </div>
           <div class="now-playing">
             <div class="now-title">Now Playing</div>
@@ -69,16 +72,7 @@
             <button class="dial" type="button" @click="nextChannel">CH +</button>
           </div>
 
-          <div class="viewer-counts">
-            <div class="viewer-count">
-              <span class="label">Total Viewers</span>
-              <strong>{{ totalViewers }}</strong>
-            </div>
-            <div class="viewer-count">
-              <span class="label">Channel Viewers</span>
-              <strong>{{ channelViewers }}</strong>
-            </div>
-          </div>
+
 
           <div class="panel-tabs">
             <button
@@ -88,6 +82,14 @@
               @click="activePanel = 'chat'"
             >
               Chat
+            </button>
+            <button
+              class="tab-button"
+              :class="{ active: activePanel === 'guide' }"
+              type="button"
+              @click="activePanel = 'guide'"
+            >
+              Guide
             </button>
             <button
               class="tab-button"
@@ -130,7 +132,42 @@
                 <span>100%</span>
               </div>
             </div>
+          </div>
 
+          <div v-else-if="activePanel === 'chat'" class="panel-section chat-panel">
+            <div ref="chatLogRef" class="chat-log">
+              <div
+                v-for="message in currentChatMessages"
+                :key="message.id"
+                class="chat-message"
+                :class="{ system: message.kind === 'system' }"
+              >
+                <span v-if="message.kind !== 'system'" class="chat-user">{{ message.username }}</span>
+                <span class="chat-text">{{ message.text }}</span>
+              </div>
+            </div>
+
+            <div v-if="!isChatAuthorized" class="chat-auth">
+              <p>Sign in with Discord to chat.</p>
+              <a class="secondary" href="/api/auth/discord/login?redirect=/&scope=chat">
+                Sign in with Discord
+              </a>
+            </div>
+
+            <form class="chat-input" @submit.prevent="sendChatMessage">
+              <input
+                v-model.trim="chatInput"
+                type="text"
+                placeholder="Type a message"
+                :disabled="!isChatAuthorized"
+              />
+              <button class="secondary" type="submit" :disabled="!isChatAuthorized || !chatInput.trim()">
+                Send
+              </button>
+            </form>
+          </div>
+
+          <div v-else class="panel-section">
             <div class="guide">
               <div class="guide-left">
                 <div class="guide-left-header">Guide</div>
@@ -169,39 +206,6 @@
               </div>
             </div>
           </div>
-
-          <div v-else class="panel-section chat-panel">
-            <div ref="chatLogRef" class="chat-log">
-              <div
-                v-for="message in currentChatMessages"
-                :key="message.id"
-                class="chat-message"
-                :class="{ system: message.kind === 'system' }"
-              >
-                <span v-if="message.kind !== 'system'" class="chat-user">{{ message.username }}</span>
-                <span class="chat-text">{{ message.text }}</span>
-              </div>
-            </div>
-
-            <div v-if="!isChatAuthorized" class="chat-auth">
-              <p>Sign in with Discord to chat.</p>
-              <a class="secondary" href="/api/auth/discord/login?redirect=/&scope=chat">
-                Sign in with Discord
-              </a>
-            </div>
-
-            <form class="chat-input" @submit.prevent="sendChatMessage">
-              <input
-                v-model.trim="chatInput"
-                type="text"
-                placeholder="Type a message"
-                :disabled="!isChatAuthorized"
-              />
-              <button class="secondary" type="submit" :disabled="!isChatAuthorized || !chatInput.trim()">
-                Send
-              </button>
-            </form>
-          </div>
         </div>
       </aside>
     </main>
@@ -225,10 +229,10 @@ const defaultChannelNames = {
   'saturday-morning': saturdayMorningData?.channel || 'Saturday Morning'
 }
 
-function buildChannel(payload, fallbackName, index, slug) {
+function buildPlaylist(payload, fallbackName, fallbackTitlePrefix = 'Video') {
   const payloadName = typeof payload?.channel === 'string' ? payload.channel.trim() : ''
   const fallback = typeof fallbackName === 'string' ? fallbackName.trim() : ''
-  const name = fallback || payloadName || `Channel ${index + 1}`
+  const name = fallback || payloadName || 'Channel'
   const videos = Array.isArray(payload?.videos) ? payload.videos : []
   const normalizedVideos = videos
     .filter((video) => video && typeof video.id === 'string' && video.id.trim().length > 0)
@@ -236,7 +240,7 @@ function buildChannel(payload, fallbackName, index, slug) {
       const duration = Number(video.durationSeconds)
       return {
         id: video.id.trim(),
-        title: video.title || `${name} Video ${videoIndex + 1}`,
+        title: video.title || `${name} ${fallbackTitlePrefix} ${videoIndex + 1}`,
         durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : 0
       }
     })
@@ -244,14 +248,28 @@ function buildChannel(payload, fallbackName, index, slug) {
   const totalDuration = normalizedVideos.reduce((sum, video) => sum + Math.max(0, video.durationSeconds), 0)
 
   return {
-    slug,
     name,
     videos: normalizedVideos,
     totalDuration
   }
 }
 
+function buildChannel(payload, fallbackName, index, slug, blockSlug) {
+  const fallback = typeof fallbackName === 'string' ? fallbackName.trim() : ''
+  const name = fallback || `Channel ${index + 1}`
+  const playlist = buildPlaylist(payload, name, 'Video')
+  return {
+    slug,
+    name: playlist.name,
+    videos: playlist.videos,
+    totalDuration: playlist.totalDuration,
+    blockSlug: blockSlug || ''
+  }
+}
+
 const channels = ref([])
+const scheduleByChannel = ref({})
+const blockPlaylists = ref({})
 
 const activeChannelIndex = ref(0)
 const isOn = ref(true)
@@ -312,28 +330,21 @@ const scheduleInfo = computed(() => {
       : null
   }
 
-  const seconds = getSecondsSinceWeekStartInZone(now.value, scheduleTimeZone)
-  const position = seconds % channel.totalDuration
-
-  let cursor = 0
-  for (let index = 0; index < channel.videos.length; index += 1) {
-    const video = channel.videos[index]
-    const nextCursor = cursor + video.durationSeconds
-    if (position < nextCursor) {
-      return {
-        index,
-        video,
-        offsetSeconds: Math.floor(position - cursor)
-      }
+  const entries = scheduleByChannel.value?.[channel.slug] || []
+  const nowMs = now.value.getTime()
+  let scheduledStartMs = null
+  if (channel.blockSlug) {
+    const latest = getLatestScheduleEntry(entries, nowMs)
+    if (latest && latest.blockSlug === channel.blockSlug) {
+      scheduledStartMs = latest.startMs
     }
-    cursor = nextCursor
   }
 
-  return {
-    index: 0,
-    video: channel.videos[0],
-    offsetSeconds: 0
-  }
+  const positionSeconds = Number.isFinite(scheduledStartMs)
+    ? Math.max(0, Math.floor((nowMs - scheduledStartMs) / 1000))
+    : getSecondsSinceWeekStartInZone(now.value, scheduleTimeZone)
+
+  return getVideoAt(channel, positionSeconds)
 })
 
 const currentVideoTitle = computed(() => scheduleInfo.value?.video?.title || 'Add video IDs in JSON')
@@ -411,11 +422,11 @@ const guideHeaderSegments = computed(() => {
   return segments
 })
 const guideRows = computed(() => {
-  const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone)
   const windowSeconds = guideHours * 3600
+  const windowStart = guideStart.value
   return channels.value.map((channel) => ({
     name: channel.name,
-    blocks: buildGuideBlocks(channel, startSeconds, windowSeconds)
+    blocks: buildGuideBlocksForChannel(channel, windowStart, windowSeconds)
   }))
 })
 
@@ -478,28 +489,65 @@ function formatTime(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
 }
 
-function getVideoAt(channel, secondsOfDay) {
-  if (!channel || channel.videos.length === 0) return null
-  if (channel.totalDuration <= 0) {
-    return { index: 0, video: channel.videos[0], offset: 0 }
+function normalizeScheduleEntries(entries) {
+  if (!Array.isArray(entries)) return []
+  const normalized = []
+  for (const entry of entries) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
+    const blockSlug = typeof entry?.blockSlug === 'string' ? entry.blockSlug.trim() : ''
+    const startTime = typeof entry?.startTime === 'string' ? entry.startTime : ''
+    const startMs = Date.parse(startTime)
+    if (!id || !blockSlug || !Number.isFinite(startMs)) continue
+    normalized.push({ id, blockSlug, startTime, startMs })
   }
-  const position = secondsOfDay % channel.totalDuration
+  normalized.sort((a, b) => a.startMs - b.startMs)
+  return normalized
+}
+
+function getLatestScheduleEntry(entries, nowMs) {
+  let current = null
+  for (const entry of entries || []) {
+    if (entry.startMs <= nowMs) current = entry
+  }
+  return current
+}
+
+function getNextScheduleEntry(entries, nowMs) {
+  for (const entry of entries || []) {
+    if (entry.startMs > nowMs) return entry
+  }
+  return null
+}
+
+function getPlaylistForBlock(slug) {
+  if (!slug) return null
+  const playlist = blockPlaylists.value?.[slug]
+  if (!playlist || !Array.isArray(playlist.videos) || playlist.videos.length === 0) return null
+  return playlist
+}
+
+function getVideoAt(playlist, positionSeconds) {
+  if (!playlist || playlist.videos.length === 0) return null
+  if (playlist.totalDuration <= 0) {
+    return { index: 0, video: playlist.videos[0], offsetSeconds: 0 }
+  }
+  const position = positionSeconds % playlist.totalDuration
   let cursor = 0
-  for (let index = 0; index < channel.videos.length; index += 1) {
-    const video = channel.videos[index]
+  for (let index = 0; index < playlist.videos.length; index += 1) {
+    const video = playlist.videos[index]
     const nextCursor = cursor + video.durationSeconds
     if (position < nextCursor) {
-      return { index, video, offset: position - cursor }
+      return { index, video, offsetSeconds: position - cursor }
     }
     cursor = nextCursor
   }
-  return { index: 0, video: channel.videos[0], offset: 0 }
+  return { index: 0, video: playlist.videos[0], offsetSeconds: 0 }
 }
 
-function buildGuideBlocks(channel, startSecondsOfDay, windowSeconds) {
-  if (!channel || channel.videos.length === 0) return []
-  if (channel.totalDuration <= 0) {
-    const video = channel.videos[0]
+function buildGuideBlocks(playlist, startSeconds, windowSeconds) {
+  if (!playlist || playlist.videos.length === 0) return []
+  if (playlist.totalDuration <= 0) {
+    const video = playlist.videos[0]
     return [
       {
         title: video.title,
@@ -510,15 +558,15 @@ function buildGuideBlocks(channel, startSecondsOfDay, windowSeconds) {
   }
   const blocks = []
   let remaining = windowSeconds
-  let info = getVideoAt(channel, startSecondsOfDay)
+  let info = getVideoAt(playlist, startSeconds)
   if (!info) return blocks
 
   let videoIndex = info.index
-  let offsetInVideo = info.offset
+  let offsetInVideo = info.offsetSeconds
   let windowCursor = 0
 
   while (remaining > 0 && blocks.length < 200) {
-    const video = channel.videos[videoIndex]
+    const video = playlist.videos[videoIndex]
     const remainingInVideo = Math.max(1, video.durationSeconds - offsetInVideo)
     const blockSeconds = Math.min(remainingInVideo, remaining)
     blocks.push({
@@ -529,7 +577,81 @@ function buildGuideBlocks(channel, startSecondsOfDay, windowSeconds) {
     remaining -= blockSeconds
     windowCursor += blockSeconds
     offsetInVideo = 0
-    videoIndex = (videoIndex + 1) % channel.videos.length
+    videoIndex = (videoIndex + 1) % playlist.videos.length
+  }
+
+  return blocks
+}
+
+function buildGuideBlocksForChannel(channel, windowStart, windowSeconds) {
+  if (!channel) return []
+  const activeSlug = channel.blockSlug
+  const activePlaylist = {
+    videos: channel.videos || [],
+    totalDuration: channel.totalDuration || 0
+  }
+  if (!activeSlug || activePlaylist.videos.length === 0) return []
+
+  const entries = scheduleByChannel.value?.[channel.slug] || []
+  const windowStartMs = windowStart.getTime()
+  const windowEndMs = windowStartMs + windowSeconds * 1000
+  const nextEntry = getNextScheduleEntry(entries, windowStartMs)
+
+  const segments = []
+  let cursorMs = windowStartMs
+  let nextIndex = nextEntry ? entries.indexOf(nextEntry) : entries.length
+  if (cursorMs < windowEndMs) {
+    const segmentEndMs = nextEntry ? Math.min(nextEntry.startMs, windowEndMs) : windowEndMs
+    if (segmentEndMs > cursorMs) {
+      segments.push({
+        startMs: cursorMs,
+        endMs: segmentEndMs,
+        blockSlug: activeSlug,
+        scheduleStartMs: null
+      })
+    }
+    cursorMs = segmentEndMs
+  }
+
+  for (let index = nextIndex; index < entries.length && cursorMs < windowEndMs; index += 1) {
+    const entry = entries[index]
+    if (!entry || entry.startMs < cursorMs) continue
+    const nextStartMs = entries[index + 1]?.startMs ?? windowEndMs
+    const segmentEndMs = Math.min(nextStartMs, windowEndMs)
+    if (segmentEndMs <= entry.startMs) continue
+    segments.push({
+      startMs: entry.startMs,
+      endMs: segmentEndMs,
+      blockSlug: entry.blockSlug,
+      scheduleStartMs: entry.startMs
+    })
+    cursorMs = segmentEndMs
+  }
+
+  const blocks = []
+  let windowCursor = 0
+
+  for (const segment of segments) {
+    const segmentSeconds = Math.max(0, Math.floor((segment.endMs - segment.startMs) / 1000))
+    if (!segmentSeconds) continue
+    const playlist = segment.blockSlug === activeSlug
+      ? activePlaylist
+      : getPlaylistForBlock(segment.blockSlug)
+    if (!playlist) {
+      windowCursor += segmentSeconds
+      continue
+    }
+    const startSeconds = segment.scheduleStartMs
+      ? Math.max(0, Math.floor((segment.startMs - segment.scheduleStartMs) / 1000))
+      : getSecondsSinceWeekStartInZone(new Date(segment.startMs), scheduleTimeZone)
+    const segmentBlocks = buildGuideBlocks(playlist, startSeconds, segmentSeconds)
+    for (const block of segmentBlocks) {
+      blocks.push({
+        ...block,
+        startOffsetSeconds: block.startOffsetSeconds + windowCursor
+      })
+    }
+    windowCursor += segmentSeconds
   }
 
   return blocks
@@ -605,6 +727,10 @@ function handleViewerMessage(event) {
       text: data.message || 'Unable to send message.',
       at: Date.now()
     })
+  }
+  if (data.type === 'schedule_update' || data.type === 'active_update') {
+    loadActiveBlocks({ syncPlayer: true })
+    return
   }
 }
 
@@ -931,30 +1057,58 @@ function syncToSchedule(force = false) {
   }, 1200)
 }
 
-async function loadActiveBlocks() {
+async function loadActiveBlocks({ syncPlayer = false } = {}) {
   if (!import.meta.client) return
   try {
-    const [channelsResponse, activeResponse] = await Promise.all([
+    const [channelsResponse, activeResponse, scheduleResponse] = await Promise.all([
       $fetch('/api/channels'),
-      $fetch('/api/blocks/active')
+      $fetch('/api/blocks/active'),
+      $fetch('/api/schedule')
     ])
     const list = Array.isArray(channelsResponse?.channels) ? channelsResponse.channels : []
     const active = activeResponse?.active || {}
-    const payloads = {}
+    const scheduleChannels = scheduleResponse?.channels && typeof scheduleResponse.channels === 'object'
+      ? scheduleResponse.channels
+      : {}
 
+    const scheduleMap = {}
+    const scheduledBlockSlugs = new Set()
+    for (const [slug, entries] of Object.entries(scheduleChannels)) {
+      const normalized = normalizeScheduleEntries(entries)
+      scheduleMap[slug] = normalized
+      for (const entry of normalized) {
+        if (entry.blockSlug) scheduledBlockSlugs.add(entry.blockSlug)
+      }
+    }
+    scheduleByChannel.value = scheduleMap
+
+    const blockSlugs = new Set()
+    for (const channel of list) {
+      const blockSlug = typeof active?.[channel.slug] === 'string' ? active[channel.slug] : ''
+      if (blockSlug) blockSlugs.add(blockSlug)
+    }
+    for (const slug of scheduledBlockSlugs) {
+      blockSlugs.add(slug)
+    }
+
+    const payloads = {}
     await Promise.all(
-      list.map(async (channel) => {
-        const slug = channel.slug
-        const blockSlug = typeof active?.[slug] === 'string' ? active[slug] : ''
-        if (!blockSlug) return
+      [...blockSlugs].map(async (blockSlug) => {
         try {
           const response = await $fetch(`/api/blocks/${blockSlug}`)
-          payloads[slug] = response?.payload || null
+          payloads[blockSlug] = response?.payload || null
         } catch (error) {
-          payloads[slug] = null
+          payloads[blockSlug] = null
         }
       })
     )
+
+    const playlists = {}
+    for (const slug of blockSlugs) {
+      const payload = payloads[slug]
+      playlists[slug] = buildPlaylist(payload, slug, 'Video')
+    }
+    blockPlaylists.value = playlists
 
     const activeChannels = list.filter((channel) => {
       const blockSlug = typeof active?.[channel.slug] === 'string' ? active[channel.slug] : ''
@@ -962,16 +1116,25 @@ async function loadActiveBlocks() {
     })
 
     channels.value = activeChannels.map((channel, index) => {
+      const activeSlug = typeof active?.[channel.slug] === 'string' ? active[channel.slug] : ''
       const fallbackName = channel.name || defaultChannelNames[channel.slug] || channel.slug
-      const payload = payloads[channel.slug] || defaultChannelPayloads[channel.slug]
-      return buildChannel(payload, fallbackName, index, channel.slug)
+      const payload = payloads[activeSlug] || defaultChannelPayloads[channel.slug]
+      return buildChannel(payload, fallbackName, index, channel.slug, activeSlug)
     })
 
     if (activeChannelIndex.value >= channels.value.length) {
       activeChannelIndex.value = 0
     }
+
+    if (syncPlayer) {
+      nextTick(() => {
+        syncToSchedule(true)
+      })
+    }
   } catch (error) {
     channels.value = []
+    scheduleByChannel.value = {}
+    blockPlaylists.value = {}
   }
 }
 
@@ -1390,6 +1553,21 @@ onBeforeUnmount(() => {
   color: #f9d98f;
 }
 
+.panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-inline {
+  font-size: 10px;
+  color: #cbb78f;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .now-playing {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 12px;
@@ -1416,37 +1594,10 @@ onBeforeUnmount(() => {
   color: #f3e0b8;
 }
 
-.viewer-counts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.viewer-count {
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(124, 104, 69, 0.6);
-  display: grid;
-  gap: 4px;
-}
-
-.viewer-count .label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: #cbb78f;
-}
-
-.viewer-count strong {
-  font-size: 20px;
-  color: #fdf0c2;
-}
 
 .panel-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -1487,7 +1638,7 @@ onBeforeUnmount(() => {
 }
 
 .chat-log {
-  flex: 1;
+  flex: 0 0 260px;
   height: 260px;
   overflow-y: auto;
   display: flex;

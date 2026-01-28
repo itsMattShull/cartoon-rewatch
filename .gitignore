@@ -7,8 +7,10 @@
 dist
 assets/blocks/*
 assets/channels/*
+assets/schedules/*
 !assets/channels/.gitkeep
 !assets/blocks/.gitkeep
+!assets/schedules/.gitkeep
 
 # Node dependencies
 node_modules
