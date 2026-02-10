@@ -17,13 +17,18 @@
           <div class="screen">
           <div ref="screenInner" class="screen-inner" :class="{ off: !isOn }">
             <ClientOnly>
-              <div id="yt-player" class="player"></div>
+              <div class="player-shell" v-show="!isDailymotionActive">
+                <div id="yt-player"></div>
+              </div>
+              <div v-show="isDailymotionActive" class="player-shell dm-player">
+                <div id="dm-player"></div>
+              </div>
             </ClientOnly>
               <div class="scanlines"></div>
               <div class="vignette"></div>
               <div v-if="!isOn" class="screen-off">POWER OFF</div>
               <button
-                v-if="needsUserAction && isOn"
+                v-if="needsUserAction && isOn && isYouTubeActive"
                 class="audio-overlay"
                 type="button"
                 @click="enableAudio"
@@ -106,7 +111,7 @@
               <button class="toggle" :class="{ active: isOn }" type="button" @click="togglePower">
                 Power
               </button>
-              <button class="toggle" type="button" @click="toggleMute">
+              <button class="toggle" type="button" :disabled="!canControlAudio" @click="toggleMute">
                 {{ isMuted ? 'Unmute' : 'Mute' }}
               </button>
             </div>
@@ -123,7 +128,7 @@
                 :max="maxVolumePercent"
                 step="1"
                 v-model.number="volumePercent"
-                :disabled="!playerReady || !isOn"
+                :disabled="!canControlAudio"
                 @input="handleVolumeInput"
               />
               <div class="volume-scale">
@@ -229,21 +234,127 @@ const defaultChannelNames = {
   'saturday-morning': saturdayMorningData?.channel || 'Saturday Morning'
 }
 
+function normalizeVideoSource(input) {
+  if (!input) return ''
+  const cleaned = String(input).trim().toLowerCase()
+  if (cleaned === 'youtube' || cleaned === 'yt') return 'youtube'
+  if (cleaned === 'dailymotion' || cleaned === 'dm') return 'dailymotion'
+  return ''
+}
+
+function stripUrlParams(value) {
+  return String(value || '').split(/[?#]/)[0]
+}
+
+function cleanDailymotionId(value) {
+  return stripUrlParams(value).split('_')[0]
+}
+
+function stripProviderPrefix(value) {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+  const prefixed = trimmed.match(/^(yt|youtube|dm|dailymotion):(.+)$/i)
+  return prefixed ? prefixed[2].trim() : trimmed
+}
+
+function normalizeYouTubeId(input) {
+  const trimmed = stripProviderPrefix(input)
+  if (!trimmed) return ''
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+    if (host === 'youtu.be') {
+      return stripUrlParams(url.pathname.replace('/', ''))
+    }
+    if (host.includes('youtube.com')) {
+      const param = url.searchParams.get('v')
+      if (param) return stripUrlParams(param)
+      const parts = url.pathname.split('/').filter(Boolean)
+      if (parts[0] === 'shorts' || parts[0] === 'embed') {
+        return stripUrlParams(parts[1] || '')
+      }
+    }
+  } catch (error) {
+    // Not a URL.
+  }
+  if (trimmed.includes('youtu.be/')) {
+    const id = trimmed.split('youtu.be/')[1]?.split(/[?&#]/)[0]
+    if (id) return id
+  }
+  if (trimmed.includes('v=')) {
+    const id = trimmed.split('v=')[1]?.split(/[?&#]/)[0]
+    if (id) return id
+  }
+  if (trimmed.includes('/shorts/')) {
+    const id = trimmed.split('/shorts/')[1]?.split(/[?&#]/)[0]
+    if (id) return id
+  }
+  if (trimmed.includes('/embed/')) {
+    const id = trimmed.split('/embed/')[1]?.split(/[?&#]/)[0]
+    if (id) return id
+  }
+  return trimmed
+}
+
+function normalizeDailymotionId(input) {
+  const trimmed = stripProviderPrefix(input)
+  if (!trimmed) return ''
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+    if (host === 'dai.ly') {
+      return cleanDailymotionId(url.pathname.split('/').filter(Boolean)[0] || '')
+    }
+    if (host.includes('dailymotion.com')) {
+      const parts = url.pathname.split('/').filter(Boolean)
+      const videoIndex = parts.indexOf('video')
+      if (videoIndex >= 0) {
+        return cleanDailymotionId(parts[videoIndex + 1] || '')
+      }
+      if (parts[0] === 'embed' && parts[1] === 'video') {
+        return cleanDailymotionId(parts[2] || '')
+      }
+    }
+  } catch (error) {
+    // Not a URL.
+  }
+  if (trimmed.includes('dai.ly/')) {
+    const id = trimmed.split('dai.ly/')[1]?.split(/[?&#]/)[0]
+    if (id) return cleanDailymotionId(id)
+  }
+  if (trimmed.includes('dailymotion.com/video/')) {
+    const id = trimmed.split('dailymotion.com/video/')[1]?.split(/[?&#]/)[0]
+    if (id) return cleanDailymotionId(id)
+  }
+  if (trimmed.includes('dailymotion.com/embed/video/')) {
+    const id = trimmed.split('dailymotion.com/embed/video/')[1]?.split(/[?&#]/)[0]
+    if (id) return cleanDailymotionId(id)
+  }
+  return cleanDailymotionId(trimmed)
+}
+
 function buildPlaylist(payload, fallbackName, fallbackTitlePrefix = 'Video') {
   const payloadName = typeof payload?.channel === 'string' ? payload.channel.trim() : ''
   const fallback = typeof fallbackName === 'string' ? fallbackName.trim() : ''
   const name = fallback || payloadName || 'Channel'
   const videos = Array.isArray(payload?.videos) ? payload.videos : []
   const normalizedVideos = videos
-    .filter((video) => video && typeof video.id === 'string' && video.id.trim().length > 0)
     .map((video, videoIndex) => {
-      const duration = Number(video.durationSeconds)
+      const rawId = typeof video?.id === 'string' ? video.id.trim() : ''
+      const source = normalizeVideoSource(video?.source) || 'youtube'
+      const id = source === 'dailymotion'
+        ? normalizeDailymotionId(rawId)
+        : normalizeYouTubeId(rawId)
+      if (!id) return null
+      const duration = Number(video?.durationSeconds)
       return {
-        id: video.id.trim(),
-        title: video.title || `${name} ${fallbackTitlePrefix} ${videoIndex + 1}`,
+        id,
+        source,
+        title: video?.title || `${name} ${fallbackTitlePrefix} ${videoIndex + 1}`,
         durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : 0
       }
     })
+    .filter(Boolean)
 
   const totalDuration = normalizedVideos.reduce((sum, video) => sum + Math.max(0, video.durationSeconds), 0)
 
@@ -278,7 +389,12 @@ const volumePercent = ref(100)
 const maxVolumePercent = 100
 const needsUserAction = ref(false)
 const playerReady = ref(false)
-const currentVideoId = ref('')
+const currentYouTubeId = ref('')
+const currentDailymotionId = ref('')
+const currentDailymotionOffset = ref(0)
+const currentDailymotionStartedAt = ref(0)
+const lastLoggedVideoKey = ref('')
+const lastLoggedVideoMeta = ref('')
 const now = ref(new Date())
 const screenInner = ref(null)
 const supportSlot = ref(null)
@@ -295,6 +411,11 @@ const chatLogRef = ref(null)
 const pageSessionId = ref(null)
 
 let player = null
+let youTubeInitPending = false
+let dailymotionPlayer = null
+let dailymotionInitPending = false
+let dailymotionDebugBound = false
+let dailymotionSyncPending = false
 let clockInterval = null
 let syncInterval = null
 let resizeObserver = null
@@ -347,7 +468,14 @@ const scheduleInfo = computed(() => {
   return getVideoAt(channel, positionSeconds)
 })
 
-const currentVideoTitle = computed(() => scheduleInfo.value?.video?.title || 'Add video IDs in JSON')
+const activeVideoSource = computed(() => scheduleInfo.value?.video?.source || 'youtube')
+const isDailymotionActive = computed(() => activeVideoSource.value === 'dailymotion')
+const isYouTubeActive = computed(() => activeVideoSource.value !== 'dailymotion')
+const canControlAudio = computed(() => isYouTubeActive.value && playerReady.value && isOn.value)
+
+const currentVideoTitle = computed(() =>
+  scheduleInfo.value?.video?.title || 'Add YouTube or Dailymotion IDs in JSON'
+)
 const formattedOffset = computed(() => formatTime(scheduleInfo.value?.offsetSeconds ?? 0))
 const formattedDuration = computed(() =>
   formatTime(scheduleInfo.value?.video?.durationSeconds ?? 0)
@@ -898,17 +1026,24 @@ function prevChannel() {
 
 function togglePower() {
   isOn.value = !isOn.value
-  if (!playerReady.value) return
-
   if (isOn.value) {
     syncToSchedule(true)
-  } else if (player) {
+    return
+  }
+  if (isDailymotionActive.value) {
+    currentDailymotionStartedAt.value = 0
+    if (dailymotionPlayer && typeof dailymotionPlayer.pause === 'function') {
+      dailymotionPlayer.pause()
+    }
+    return
+  }
+  if (player && typeof player.pauseVideo === 'function') {
     player.pauseVideo()
   }
 }
 
 function applyVolume({ forceUnmute = false } = {}) {
-  if (!playerReady.value || !player || typeof player.setVolume !== 'function') return
+  if (!canControlAudio.value || !player || typeof player.setVolume !== 'function') return
   const targetVolume = Math.max(0, Math.min(100, Math.round(volumePercent.value)))
   player.setVolume(targetVolume)
 
@@ -934,6 +1069,7 @@ function handleVolumeInput() {
 }
 
 function toggleMute() {
+  if (!canControlAudio.value) return
   isMuted.value = !isMuted.value
   if (!playerReady.value || !player) return
 
@@ -947,7 +1083,7 @@ function toggleMute() {
 }
 
 function enableAudio() {
-  if (!playerReady.value || !player) return
+  if (!canControlAudio.value || !player) return
   applyVolume({ forceUnmute: true })
   player.playVideo()
 }
@@ -973,11 +1109,140 @@ function ensureYouTubeApi() {
   })
 }
 
-function createPlayer() {
-  if (!scheduleInfo.value) return
+function ensureDailymotionApi() {
+  if (window.dailymotion && typeof window.dailymotion.createPlayer === 'function') {
+    return Promise.resolve()
+  }
 
-  const initialVideo = scheduleInfo.value.video
-  const startSeconds = scheduleInfo.value.offsetSeconds
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById('dm-player-api')
+    if (existing) {
+      existing.addEventListener('load', () => resolve())
+      existing.addEventListener('error', () => reject())
+      return
+    }
+
+    const tag = document.createElement('script')
+    tag.id = 'dm-player-api'
+    tag.src = 'https://geo.dailymotion.com/libs/player.js'
+    tag.async = true
+    tag.addEventListener('load', () => resolve())
+    tag.addEventListener('error', () => reject())
+    document.body.appendChild(tag)
+  })
+}
+
+function logDailymotion(message, payload) {
+  const prefix = '[Dailymotion]'
+  if (payload !== undefined) {
+    console.error(`${prefix} ${message}`, payload)
+    return
+  }
+  console.error(`${prefix} ${message}`)
+}
+
+function bindDailymotionDebugEvents(playerInstance) {
+  if (!playerInstance || dailymotionDebugBound) return
+  const events = window.dailymotion?.events || {}
+  const errorEvents = [
+    events.PLAYER_ERROR,
+    events.PLAYER_PLAYBACKPERMISSION,
+    events.PLAYER_HEAVYADSINTERVENTION
+  ].filter(Boolean)
+  if (!errorEvents.length) return
+  errorEvents.forEach((eventName) => {
+    if (typeof playerInstance.on !== 'function') return
+    playerInstance.on(eventName, (payload) => {
+      logDailymotion(`Event ${eventName}`, payload)
+    })
+  })
+  dailymotionDebugBound = true
+}
+
+async function checkDailymotionSync(info) {
+  if (!dailymotionPlayer || dailymotionSyncPending || typeof dailymotionPlayer.getState !== 'function') return
+  dailymotionSyncPending = true
+  try {
+    const state = await dailymotionPlayer.getState()
+    const currentTime = Number(state?.videoTime)
+    if (!Number.isFinite(currentTime)) return
+    const desiredOffset = Number(info?.offsetSeconds || 0)
+    if (!Number.isFinite(desiredOffset)) return
+    if (Math.abs(currentTime - desiredOffset) <= 6) return
+    if (typeof dailymotionPlayer.seek === 'function') {
+      await dailymotionPlayer.seek(Math.floor(desiredOffset))
+    } else {
+      await ensureDailymotionPlayer(info, { forceRecreate: true })
+    }
+  } catch (error) {
+    logDailymotion('getState/seek failed', error)
+  } finally {
+    dailymotionSyncPending = false
+  }
+}
+
+async function ensureDailymotionPlayer(info, { forceRecreate = false } = {}) {
+  if (!info?.video?.id || dailymotionInitPending) return
+  dailymotionInitPending = true
+  try {
+    await ensureDailymotionApi()
+    await nextTick()
+    const container = document.getElementById('dm-player')
+    if (!container) return
+    if (dailymotionPlayer && typeof dailymotionPlayer.pause === 'function') {
+      await dailymotionPlayer.pause()
+    }
+    if (forceRecreate && dailymotionPlayer && typeof dailymotionPlayer.destroy === 'function') {
+      await dailymotionPlayer.destroy()
+      dailymotionPlayer = null
+    }
+    if (!dailymotionPlayer || typeof dailymotionPlayer.load !== 'function') {
+      if (dailymotionPlayer && typeof dailymotionPlayer.destroy === 'function') {
+        await dailymotionPlayer.destroy()
+      }
+      container.innerHTML = ''
+      const startTime = Math.max(0, Math.floor(info.offsetSeconds || 0))
+      dailymotionPlayer = await window.dailymotion.createPlayer('dm-player', {
+        video: info.video.id,
+        params: { startTime }
+      })
+      dailymotionDebugBound = false
+      bindDailymotionDebugEvents(dailymotionPlayer)
+    } else {
+      bindDailymotionDebugEvents(dailymotionPlayer)
+      await dailymotionPlayer.load(info.video.id)
+    }
+    if (Number.isFinite(info.offsetSeconds) && info.offsetSeconds > 0) {
+      if (typeof dailymotionPlayer.seek === 'function') {
+        await dailymotionPlayer.seek(Math.floor(info.offsetSeconds))
+      }
+    }
+  } catch (error) {
+    logDailymotion('Player init/load failed', error)
+  } finally {
+    dailymotionInitPending = false
+  }
+}
+
+function ensureYouTubePlayer(info) {
+  if (player || playerReady.value || youTubeInitPending) return
+  youTubeInitPending = true
+  ensureYouTubeApi()
+    .then(() => {
+      youTubeInitPending = false
+      if (!player && info?.video) {
+        createYouTubePlayer(info)
+      }
+    })
+    .catch(() => {
+      youTubeInitPending = false
+    })
+}
+
+function createYouTubePlayer(info) {
+  if (!info?.video) return
+  const initialVideo = info.video
+  const startSeconds = info.offsetSeconds
 
   player = new window.YT.Player('yt-player', {
     videoId: initialVideo.id,
@@ -999,7 +1264,7 @@ function createPlayer() {
       onStateChange: (event) => {
         if (event.data === window.YT.PlayerState.PLAYING) {
           needsUserAction.value = false
-          currentVideoId.value = player?.getVideoData?.().video_id || ''
+          currentYouTubeId.value = player?.getVideoData?.().video_id || ''
         }
         if (event.data === window.YT.PlayerState.ENDED) {
           syncToSchedule(true)
@@ -1032,15 +1297,83 @@ function injectSupportButton() {
   supportSlot.value.appendChild(script)
 }
 
+function logActiveVideoInfo(info) {
+  const video = info?.video
+  if (!video) return
+  const source = video.source || 'youtube'
+  const id = video.id || ''
+  const title = video.title || ''
+  const durationSeconds = Number.isFinite(video.durationSeconds) ? video.durationSeconds : 0
+  const key = `${source}:${id}`
+  const meta = `${title}|${durationSeconds}`
+  if (key === lastLoggedVideoKey.value && meta === lastLoggedVideoMeta.value) return
+  lastLoggedVideoKey.value = key
+  lastLoggedVideoMeta.value = meta
+  console.log('[Player] Video', { source, id, title, durationSeconds })
+}
+
+function syncDailymotionToSchedule(info, force = false) {
+  if (!info?.video) return
+  needsUserAction.value = false
+  if (player && typeof player.pauseVideo === 'function') {
+    player.pauseVideo()
+    currentYouTubeId.value = ''
+  }
+  const desiredId = info.video.id
+  const desiredOffset = info.offsetSeconds
+  if (!desiredId) {
+    currentDailymotionId.value = ''
+    currentDailymotionOffset.value = 0
+    currentDailymotionStartedAt.value = 0
+    return
+  }
+  let shouldLoad = force || desiredId !== currentDailymotionId.value
+  if (!shouldLoad) {
+    const lastStart = currentDailymotionStartedAt.value
+    const elapsedSeconds = lastStart ? (now.value.getTime() - lastStart) / 1000 : 0
+    const estimatedOffset = currentDailymotionOffset.value + Math.max(0, elapsedSeconds)
+    if (Math.abs(estimatedOffset - desiredOffset) > 6) {
+      shouldLoad = true
+    }
+  }
+  if (shouldLoad || !dailymotionPlayer) {
+    currentDailymotionId.value = desiredId
+    currentDailymotionOffset.value = desiredOffset
+    currentDailymotionStartedAt.value = now.value.getTime()
+    void ensureDailymotionPlayer(info)
+  } else {
+    void checkDailymotionSync(info)
+  }
+}
+
 function syncToSchedule(force = false) {
-  if (!playerReady.value || !player || !isOn.value || !channels.value.length) return
+  if (!isOn.value || !channels.value.length) return
   const info = scheduleInfo.value
   if (!info || !info.video) return
+
+  logActiveVideoInfo(info)
+
+  if (info.video.source === 'dailymotion') {
+    syncDailymotionToSchedule(info, force)
+    return
+  }
+
+  if (currentDailymotionId.value && dailymotionPlayer) {
+    currentDailymotionStartedAt.value = 0
+    if (typeof dailymotionPlayer.pause === 'function') {
+      dailymotionPlayer.pause()
+    }
+  }
+
+  if (!player || !playerReady.value) {
+    ensureYouTubePlayer(info)
+    return
+  }
 
   const desiredId = info.video.id
   const desiredOffset = info.offsetSeconds
 
-  let shouldLoad = force || desiredId !== currentVideoId.value
+  let shouldLoad = force || desiredId !== currentYouTubeId.value
 
   if (!shouldLoad) {
     const currentTime = player.getCurrentTime?.() ?? 0
@@ -1050,7 +1383,7 @@ function syncToSchedule(force = false) {
   }
 
   if (shouldLoad) {
-    currentVideoId.value = desiredId
+    currentYouTubeId.value = desiredId
     player.loadVideoById({ videoId: desiredId, startSeconds: desiredOffset })
     if (isMuted.value) {
       player.mute()
@@ -1167,10 +1500,7 @@ onMounted(async () => {
   await loadActiveBlocks()
   viewerShouldReconnect = true
   connectViewerSocket()
-  await ensureYouTubeApi()
-  if (!player) {
-    createPlayer()
-  }
+  syncToSchedule(true)
 
   resizeObserver = new ResizeObserver(() => {
     syncPlayerSize()
@@ -1189,6 +1519,9 @@ onBeforeUnmount(() => {
   if (syncInterval) window.clearInterval(syncInterval)
   if (resizeObserver) resizeObserver.disconnect()
   if (player && player.destroy) player.destroy()
+  if (dailymotionPlayer && typeof dailymotionPlayer.destroy === 'function') {
+    dailymotionPlayer.destroy()
+  }
   viewerShouldReconnect = false
   if (viewerReconnectTimer) window.clearTimeout(viewerReconnectTimer)
   if (viewerHelloTimer) window.clearTimeout(viewerHelloTimer)
@@ -1329,20 +1662,29 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-.player {
+.player-shell {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
 }
 
-.player :deep(iframe),
-.player :deep(div) {
+.dm-player {
+  border: 0;
+}
+
+.dm-player #dm-player {
   width: 100%;
   height: 100%;
 }
 
-.screen-inner.off .player {
+.player-shell :deep(iframe),
+.player-shell :deep(div) {
+  width: 100%;
+  height: 100%;
+}
+
+.screen-inner.off .player-shell {
   opacity: 0;
 }
 
@@ -1433,14 +1775,14 @@ onBeforeUnmount(() => {
     aspect-ratio: auto;
   }
 
-  .player {
+  .player-shell {
     overflow: hidden;
     inset: 0;
     width: 100% !important;
     height: 100% !important;
   }
 
-  .player :deep(iframe) {
+  .player-shell :deep(iframe) {
     position: absolute;
     top: 50%;
     left: 50%;
@@ -1454,7 +1796,8 @@ onBeforeUnmount(() => {
   }
 
   :global(iframe#yt-player),
-  :global(iframe.player) {
+  :global(iframe.player-shell),
+  :global(iframe.dm-player) {
     position: absolute;
     top: 50%;
     left: 50%;

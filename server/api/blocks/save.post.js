@@ -13,6 +13,14 @@ function normalizeSlug(input) {
     .replace(/[^a-z0-9-]/g, '')
 }
 
+function normalizeVideoSource(input) {
+  if (!input) return 'youtube'
+  const cleaned = String(input).trim().toLowerCase()
+  if (cleaned === 'youtube' || cleaned === 'yt') return 'youtube'
+  if (cleaned === 'dailymotion' || cleaned === 'dm') return 'dailymotion'
+  return 'youtube'
+}
+
 function sanitizePayload(payload, fallbackName) {
   const name =
     typeof payload?.channel === 'string'
@@ -25,9 +33,11 @@ function sanitizePayload(payload, fallbackName) {
   const videos = Array.isArray(payload?.videos) ? payload.videos : []
   return {
     channel: name || fallbackName,
-    note: 'Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.',
+    note:
+      'Replace each id with a YouTube or Dailymotion video ID (or URL), and durationSeconds with the full length in seconds. Use source: "dailymotion" for Dailymotion videos.',
     videos: videos.map((video) => ({
       id: typeof video.id === 'string' ? video.id : '',
+      source: normalizeVideoSource(video.source),
       title: typeof video.title === 'string' ? video.title : '',
       durationSeconds: Number(video.durationSeconds) || 0
     }))

@@ -25,10 +25,15 @@
     </section>
 
     <section v-if="isAuthorized" class="maker-table">
+      <p class="helper maker-hint">
+        Accepts YouTube or Dailymotion video URLs (or use `yt:`/`dm:` prefixes for raw IDs). Auto-fill works for
+        YouTube and Dailymotion.
+      </p>
       <div class="table-head">
         <span></span>
         <span>#</span>
         <span>Start</span>
+        <span>Provider</span>
         <span>Video ID</span>
         <span>Preview</span>
         <span>Title</span>
@@ -59,18 +64,22 @@
           </button>
           <span class="cell-index">{{ index + 1 }}</span>
           <span class="cell-start">{{ formatClockOffset(getStartSeconds(index)) }}</span>
+          <select v-model="row.source" class="cell-input cell-select" @change="updateVideoInfo(row, index)">
+            <option value="youtube">YouTube</option>
+            <option value="dailymotion">Dailymotion</option>
+          </select>
           <input
             v-model.trim="row.id"
             type="text"
             class="cell-input"
-            placeholder="YouTube ID or URL"
+            placeholder="YouTube or Dailymotion ID/URL"
             @input="queueUpdate(row, index)"
             @blur="updateVideoInfo(row, index)"
           />
           <div class="cell-preview">
             <img
-              v-if="getPreviewUrl(row.id)"
-              :src="getPreviewUrl(row.id)"
+              v-if="getPreviewUrl(row)"
+              :src="getPreviewUrl(row)"
               alt=""
               loading="lazy"
               @click="openPreview(row)"
@@ -126,20 +135,27 @@
           </div>
           <div class="card-body">
             <label class="card-field">
+              <span>Provider</span>
+              <select v-model="row.source" class="cell-input cell-select" @change="updateVideoInfo(row, index)">
+                <option value="youtube">YouTube</option>
+                <option value="dailymotion">Dailymotion</option>
+              </select>
+            </label>
+            <label class="card-field">
               <span>Video ID</span>
               <input
                 v-model.trim="row.id"
                 type="text"
                 class="cell-input"
-                placeholder="YouTube ID or URL"
+                placeholder="YouTube or Dailymotion ID/URL"
                 @input="queueUpdate(row, index)"
                 @blur="updateVideoInfo(row, index)"
               />
             </label>
             <div class="cell-preview">
               <img
-                v-if="getPreviewUrl(row.id)"
-                :src="getPreviewUrl(row.id)"
+                v-if="getPreviewUrl(row)"
+                :src="getPreviewUrl(row)"
                 alt=""
                 loading="lazy"
                 @click="openPreview(row)"
@@ -226,12 +242,144 @@ const hoverIndex = ref(null)
 const updateTimers = ref({})
 const isPreviewOpen = ref(false)
 const previewVideoId = ref('')
+const previewVideoSource = ref('youtube')
 const previewTitle = ref('')
 let videoUidCounter = 0
 
+function normalizeVideoSource(input) {
+  if (!input) return ''
+  const cleaned = String(input).trim().toLowerCase()
+  if (cleaned === 'youtube' || cleaned === 'yt') return 'youtube'
+  if (cleaned === 'dailymotion' || cleaned === 'dm') return 'dailymotion'
+  return ''
+}
+
+function getRegionCode() {
+  if (!import.meta.client) return 'us'
+  const locale =
+    navigator.language ||
+    Intl.DateTimeFormat().resolvedOptions().locale ||
+    ''
+  const match = locale.match(/-([A-Za-z]{2})\b/)
+  return (match ? match[1] : 'US').toLowerCase()
+}
+
+function parseGeoblockingList(list) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return { mode: 'allow', countries: [] }
+  }
+  const [first, ...rest] = list.map((entry) => String(entry).toLowerCase())
+  if (first === 'allow' || first === 'deny') {
+    return { mode: first, countries: rest }
+  }
+  return { mode: 'allow', countries: list.map((entry) => String(entry).toLowerCase()) }
+}
+
+function isRegionAllowed(list, region) {
+  const normalizedRegion = String(region || '').toLowerCase()
+  const { mode, countries } = parseGeoblockingList(list)
+  if (!countries.length) return true
+  if (mode === 'allow') {
+    return countries.includes(normalizedRegion)
+  }
+  return !countries.includes(normalizedRegion)
+}
+
+function stripUrlParams(value) {
+  return String(value || '').split(/[?#]/)[0]
+}
+
+function cleanDailymotionId(value) {
+  return stripUrlParams(value).split('_')[0]
+}
+
+function isLikelyDailymotionId(value) {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return false
+  if (trimmed.length === 11) return false
+  return /^x[a-z0-9]+$/i.test(trimmed)
+}
+
+function parseVideoInput(input) {
+  if (!input) return { id: '', source: '' }
+  const trimmed = String(input).trim()
+  if (!trimmed) return { id: '', source: '' }
+  const prefixed = trimmed.match(/^(yt|youtube|dm|dailymotion):(.+)$/i)
+  if (prefixed) {
+    const source = prefixed[1].toLowerCase().startsWith('d') ? 'dailymotion' : 'youtube'
+    return { id: prefixed[2].trim(), source }
+  }
+  try {
+    const url = new URL(trimmed)
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+    if (host === 'youtu.be') {
+      return { id: stripUrlParams(url.pathname.replace('/', '')), source: 'youtube' }
+    }
+    if (host.includes('youtube.com')) {
+      const param = url.searchParams.get('v')
+      if (param) return { id: stripUrlParams(param), source: 'youtube' }
+      const parts = url.pathname.split('/').filter(Boolean)
+      if (parts[0] === 'shorts' || parts[0] === 'embed') {
+        return { id: stripUrlParams(parts[1] || ''), source: 'youtube' }
+      }
+    }
+    if (host === 'dai.ly') {
+      return { id: cleanDailymotionId(url.pathname.split('/').filter(Boolean)[0] || ''), source: 'dailymotion' }
+    }
+    if (host.includes('dailymotion.com')) {
+      const parts = url.pathname.split('/').filter(Boolean)
+      const videoIndex = parts.indexOf('video')
+      if (videoIndex >= 0) {
+        return { id: cleanDailymotionId(parts[videoIndex + 1] || ''), source: 'dailymotion' }
+      }
+      if (parts[0] === 'embed' && parts[1] === 'video') {
+        return { id: cleanDailymotionId(parts[2] || ''), source: 'dailymotion' }
+      }
+    }
+  } catch (error) {
+    // Not a URL.
+  }
+  if (trimmed.includes('dai.ly/')) {
+    const id = trimmed.split('dai.ly/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id: cleanDailymotionId(id), source: 'dailymotion' }
+  }
+  if (trimmed.includes('dailymotion.com/video/')) {
+    const id = trimmed.split('dailymotion.com/video/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id: cleanDailymotionId(id), source: 'dailymotion' }
+  }
+  if (trimmed.includes('dailymotion.com/embed/video/')) {
+    const id = trimmed.split('dailymotion.com/embed/video/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id: cleanDailymotionId(id), source: 'dailymotion' }
+  }
+  if (isLikelyDailymotionId(trimmed)) {
+    return { id: trimmed, source: 'dailymotion' }
+  }
+  if (trimmed.includes('youtu.be/')) {
+    const id = trimmed.split('youtu.be/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id, source: 'youtube' }
+  }
+  if (trimmed.includes('v=')) {
+    const id = trimmed.split('v=')[1]?.split(/[?&#]/)[0]
+    if (id) return { id, source: 'youtube' }
+  }
+  if (trimmed.includes('/shorts/')) {
+    const id = trimmed.split('/shorts/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id, source: 'youtube' }
+  }
+  if (trimmed.includes('/embed/')) {
+    const id = trimmed.split('/embed/')[1]?.split(/[?&#]/)[0]
+    if (id) return { id, source: 'youtube' }
+  }
+  return { id: trimmed, source: '' }
+}
+
 function toRow(video) {
+  const rawId = typeof video?.id === 'string' ? video.id : ''
+  const parsed = parseVideoInput(rawId)
+  const explicitSource = normalizeVideoSource(video?.source)
   return {
-    id: typeof video?.id === 'string' ? video.id : '',
+    id: parsed.id || rawId.trim(),
+    source: explicitSource || parsed.source || 'youtube',
     title: typeof video?.title === 'string' ? video.title : '',
     durationSeconds: Number(video?.durationSeconds) || 0,
     _uid: `vid-${videoUidCounter++}`
@@ -240,7 +388,13 @@ function toRow(video) {
 
 function ensureRows() {
   if (!rows.value.length) {
-    rows.value.push({ id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
+    rows.value.push({
+      id: '',
+      source: 'youtube',
+      title: '',
+      durationSeconds: 0,
+      _uid: `vid-${videoUidCounter++}`
+    })
   }
 }
 
@@ -255,9 +409,11 @@ function loadFromPayload(payload) {
 function buildPayload() {
   return {
     channel: blockName.value || 'Block',
-    note: 'Replace each id with a YouTube video ID and durationSeconds with the full length in seconds.',
+    note:
+      "Replace each id with a YouTube or Dailymotion video ID (or URL), and durationSeconds with the full length in seconds. Use source: 'dailymotion' for Dailymotion videos.",
     videos: rows.value.map((video) => ({
       id: video.id,
+      source: normalizeVideoSource(video.source) || parseVideoInput(video.id).source || 'youtube',
       title: video.title,
       durationSeconds: Number(video.durationSeconds) || 0
     }))
@@ -266,12 +422,24 @@ function buildPayload() {
 
 function addRow() {
   if (!isAuthorized.value) return
-  rows.value.push({ id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
+  rows.value.push({
+    id: '',
+    source: 'youtube',
+    title: '',
+    durationSeconds: 0,
+    _uid: `vid-${videoUidCounter++}`
+  })
 }
 
 function insertRow(index) {
   if (!isAuthorized.value) return
-  rows.value.splice(index, 0, { id: '', title: '', durationSeconds: 0, _uid: `vid-${videoUidCounter++}` })
+  rows.value.splice(index, 0, {
+    id: '',
+    source: 'youtube',
+    title: '',
+    durationSeconds: 0,
+    _uid: `vid-${videoUidCounter++}`
+  })
 }
 
 function removeRow(index) {
@@ -304,53 +472,23 @@ function getStartSeconds(index) {
   return cursor
 }
 
-function normalizeVideoId(input) {
-  if (!input) return ''
-  const trimmed = input.trim()
-  try {
-    const url = new URL(trimmed)
-    const host = url.hostname.replace(/^www\./, '')
-    if (host === 'youtu.be') {
-      return url.pathname.replace('/', '')
-    }
-    if (host.includes('youtube.com')) {
-      const param = url.searchParams.get('v')
-      if (param) return param
-      const parts = url.pathname.split('/').filter(Boolean)
-      if (parts[0] === 'shorts' || parts[0] === 'embed') {
-        return parts[1] || ''
-      }
-    }
-  } catch (error) {
-    // Not a URL, fall back to regex.
-  }
-  if (trimmed.includes('youtu.be/')) {
-    const id = trimmed.split('youtu.be/')[1]?.split(/[?&#]/)[0]
-    if (id) return id
-  }
-  if (trimmed.includes('v=')) {
-    const id = trimmed.split('v=')[1]?.split(/[?&#]/)[0]
-    if (id) return id
-  }
-  if (trimmed.includes('/shorts/')) {
-    const id = trimmed.split('/shorts/')[1]?.split(/[?&#]/)[0]
-    if (id) return id
-  }
-  if (trimmed.includes('/embed/')) {
-    const id = trimmed.split('/embed/')[1]?.split(/[?&#]/)[0]
-    if (id) return id
-  }
-  return trimmed
-}
-
-function getPreviewUrl(id) {
-  const videoId = normalizeVideoId(id)
+function getPreviewUrl(row) {
+  if (!row) return ''
+  const parsed = parseVideoInput(row.id)
+  const source = normalizeVideoSource(row.source) || parsed.source
+  const videoId = parsed.id || row.id
   if (!videoId) return ''
+  if (source === 'dailymotion') {
+    return `https://www.dailymotion.com/thumbnail/video/${videoId}`
+  }
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
 }
 
 const previewEmbedUrl = computed(() => {
   if (!previewVideoId.value) return ''
+  if (previewVideoSource.value === 'dailymotion') {
+    return `https://www.dailymotion.com/embed/video/${previewVideoId.value}`
+  }
   const params = new URLSearchParams({
     autoplay: '1',
     controls: '0',
@@ -362,9 +500,12 @@ const previewEmbedUrl = computed(() => {
 })
 
 function openPreview(row) {
-  const videoId = normalizeVideoId(row?.id)
+  const parsed = parseVideoInput(row?.id || '')
+  const source = normalizeVideoSource(row?.source) || parsed.source || 'youtube'
+  const videoId = parsed.id || row?.id
   if (!videoId) return
   previewVideoId.value = videoId
+  previewVideoSource.value = source
   previewTitle.value = row?.title || 'Preview'
   isPreviewOpen.value = true
 }
@@ -372,10 +513,11 @@ function openPreview(row) {
 function closePreview() {
   isPreviewOpen.value = false
   previewVideoId.value = ''
+  previewVideoSource.value = 'youtube'
   previewTitle.value = ''
 }
 
-async function fetchFromServer(videoId) {
+async function fetchFromYouTube(videoId) {
   const response = await fetch(`/api/youtube-info?id=${encodeURIComponent(videoId)}`)
   if (!response.ok) {
     const message = await response.text().catch(() => '')
@@ -384,16 +526,52 @@ async function fetchFromServer(videoId) {
   return response.json()
 }
 
+async function fetchFromDailymotion(videoId) {
+  const response = await fetch(`/api/dailymotion-info?id=${encodeURIComponent(videoId)}`)
+  if (!response.ok) {
+    const message = await response.text().catch(() => '')
+    throw new Error(message || `Request failed (${response.status})`)
+  }
+  return response.json()
+}
+
+function normalizeRowInput(row) {
+  if (!row) return { videoId: '', source: 'youtube' }
+  const parsed = parseVideoInput(row.id || '')
+  if (parsed.id && parsed.id !== row.id) {
+    row.id = parsed.id
+  }
+  if (parsed.source && normalizeVideoSource(row.source) !== parsed.source) {
+    row.source = parsed.source
+  }
+  const source = normalizeVideoSource(row.source) || 'youtube'
+  return { videoId: parsed.id || row.id || '', source }
+}
+
 async function updateVideoInfo(row, index) {
-  const videoId = normalizeVideoId(row.id)
+  const { videoId, source } = normalizeRowInput(row)
   if (!videoId || !import.meta.client || !isAuthorized.value) return
-  if (videoId !== row.id) row.id = videoId
   setFetchStatus(index, 'Loading...')
   try {
-    const apiResult = await fetchFromServer(videoId)
+    const apiResult = source === 'dailymotion'
+      ? await fetchFromDailymotion(videoId)
+      : await fetchFromYouTube(videoId)
     if (apiResult?.title) row.title = apiResult.title
     if (Number.isFinite(apiResult?.durationSeconds)) {
       row.durationSeconds = apiResult.durationSeconds
+    }
+    if (source === 'dailymotion') {
+      const allowEmbed = apiResult?.allowEmbed ?? apiResult?.allow_embed ?? true
+      const geoList = apiResult?.geoblocking || []
+      const region = getRegionCode()
+      if (!allowEmbed) {
+        setFetchStatus(index, 'Embed disabled')
+        return
+      }
+      if (!isRegionAllowed(geoList, region)) {
+        setFetchStatus(index, `Geo-blocked (${region.toUpperCase()})`)
+        return
+      }
     }
     setFetchStatus(index, apiResult?.title ? 'OK' : 'Not found')
   } catch (error) {
@@ -402,13 +580,7 @@ async function updateVideoInfo(row, index) {
 }
 
 function queueUpdate(row, index) {
-  const trimmed = row.id?.trim() || ''
-  if (trimmed.includes('youtube.com') || trimmed.includes('youtu.be') || trimmed.startsWith('http')) {
-    const normalized = normalizeVideoId(trimmed)
-    if (normalized && normalized !== row.id) {
-      row.id = normalized
-    }
-  }
+  const { source } = normalizeRowInput(row)
   if (!import.meta.client) return
   if (updateTimers.value[index]) {
     window.clearTimeout(updateTimers.value[index])
@@ -654,6 +826,11 @@ watch(
   color: #cab688;
 }
 
+.maker-hint {
+  margin: 0 0 10px;
+  line-height: 1.4;
+}
+
 .code {
   font-family: 'VT323', monospace;
   font-size: 14px;
@@ -670,7 +847,7 @@ watch(
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 36px 40px 90px 1.1fr 110px 1.5fr 120px 120px 90px;
+  grid-template-columns: 36px 40px 90px 120px 1.1fr 110px 1.5fr 120px 120px 90px;
   gap: 10px;
   align-items: center;
 }
@@ -816,6 +993,10 @@ watch(
   background: #141418;
   color: #f7e4b4;
   font-family: 'Orbitron', sans-serif;
+}
+
+.cell-select {
+  text-transform: uppercase;
 }
 
 .add-row {
