@@ -13,7 +13,10 @@ function base64UrlDecode(value) {
 
 export function getAllowedIds() {
   const raw = process.env.DISCORD_ALLOWED_IDS || ''
-  return raw
+  // Strip surrounding quotes that are sometimes added in .env files
+  // (e.g. DISCORD_ALLOWED_IDS="123,456" would otherwise include the quotes)
+  const unquoted = raw.replace(/^["']|["']$/g, '')
+  return unquoted
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean)
