@@ -12,10 +12,23 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const code = query.code
   const state = query.state
-  const cookieState = getCookie(event, 'discord_oauth_state')
-  if (!code || !state || !cookieState || state !== cookieState) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid OAuth state' })
+  const cookieStateRaw = getCookie(event, 'discord_oauth_state')
+  const cookieStates = (() => {
+    try {
+      const parsed = cookieStateRaw ? JSON.parse(cookieStateRaw) : []
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })()
+  if (!code || !state || !cookieStates.includes(String(state))) {
+    // State mismatch: the cookie expired, was overwritten by a newer login attempt,
+    // or the user navigated back and reused an old Discord redirect. Send them back
+    // to login so they can start a fresh OAuth flow instead of showing a dead-end error.
+    return sendRedirect(event, '/api/auth/discord/login?error=state_mismatch')
   }
+  // Remove the consumed state so it can't be replayed
+  const remainingStates = cookieStates.filter((s) => s !== String(state))
 
   const tokenBody = new URLSearchParams({
     client_id: clientId,
@@ -70,13 +83,23 @@ export default defineEventHandler(async (event) => {
   const redirectCookie = getCookie(event, 'discord_oauth_redirect')
   const safeRedirect = redirectCookie && redirectCookie.startsWith('/') ? redirectCookie : '/admin'
 
-  setCookie(event, 'discord_oauth_state', '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 0
-  })
+  if (remainingStates.length > 0) {
+    setCookie(event, 'discord_oauth_state', JSON.stringify(remainingStates), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 60 * 10
+    })
+  } else {
+    setCookie(event, 'discord_oauth_state', '', {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 0
+    })
+  }
 
   setCookie(event, 'discord_oauth_redirect', '', {
     httpOnly: true,

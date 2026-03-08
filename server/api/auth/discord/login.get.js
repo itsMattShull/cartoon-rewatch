@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { defineEventHandler, getQuery, sendRedirect, setCookie } from 'h3'
+import { defineEventHandler, getQuery, getCookie, sendRedirect, setCookie } from 'h3'
 
 export default defineEventHandler((event) => {
   const clientId = process.env.DISCORD_CLIENT_ID
@@ -15,7 +15,18 @@ export default defineEventHandler((event) => {
   const safeScope = requestedScope === 'chat' ? requestedScope : ''
 
   const state = crypto.randomBytes(16).toString('hex')
-  setCookie(event, 'discord_oauth_state', state, {
+  const existingStates = (() => {
+    try {
+      const raw = getCookie(event, 'discord_oauth_state')
+      const parsed = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })()
+  // Keep at most the 5 most recent states to handle multiple concurrent login flows
+  const states = [...existingStates, state].slice(-5)
+  setCookie(event, 'discord_oauth_state', JSON.stringify(states), {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
