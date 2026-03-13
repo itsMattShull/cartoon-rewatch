@@ -14,6 +14,18 @@ export default defineEventHandler((event) => {
   const requestedScope = typeof query.scope === 'string' ? query.scope : ''
   const safeScope = requestedScope === 'chat' ? requestedScope : ''
 
+  // Clear legacy separate scope/redirect cookies so stale values from old
+  // login flows can't interfere with the new state-bundled format.
+  const cookieOptions = {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0
+  }
+  setCookie(event, 'discord_oauth_scope', '', cookieOptions)
+  setCookie(event, 'discord_oauth_redirect', '', cookieOptions)
+
   const state = crypto.randomBytes(16).toString('hex')
   const existingEntries = (() => {
     try {
