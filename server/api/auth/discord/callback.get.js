@@ -25,7 +25,17 @@ export default defineEventHandler(async (event) => {
     // State mismatch: the cookie expired, was overwritten by a newer login attempt,
     // or the user navigated back and reused an old Discord redirect. Send them back
     // to login so they can start a fresh OAuth flow instead of showing a dead-end error.
-    return sendRedirect(event, '/api/auth/discord/login?error=state_mismatch')
+    // Preserve the scope and redirect cookies in the recovery URL so the login handler
+    // refreshes them with a new expiry — otherwise chat users lose their scope=chat
+    // context and receive a 403 after the recovery flow completes.
+    const recoveryScopeCookie = getCookie(event, 'discord_oauth_scope')
+    const recoveryRedirectCookie = getCookie(event, 'discord_oauth_redirect')
+    const recoveryParams = new URLSearchParams({ error: 'state_mismatch' })
+    if (recoveryScopeCookie === 'chat') recoveryParams.set('scope', 'chat')
+    if (recoveryRedirectCookie && recoveryRedirectCookie.startsWith('/')) {
+      recoveryParams.set('redirect', recoveryRedirectCookie)
+    }
+    return sendRedirect(event, `/api/auth/discord/login?${recoveryParams.toString()}`)
   }
   // Remove the consumed state so it can't be replayed
   const remainingStates = cookieStates.filter((s) => s !== String(state))
