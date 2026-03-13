@@ -1,60 +1,36 @@
 import crypto from 'node:crypto'
-import { defineEventHandler, getQuery, getCookie, sendRedirect, setCookie } from 'h3'
+import { defineEventHandler, getQuery, sendRedirect, setCookie } from 'h3'
+
+function oauthCookie(maxAge) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge
+  }
+}
 
 export default defineEventHandler((event) => {
   const clientId = process.env.DISCORD_CLIENT_ID
   const redirectUri = process.env.DISCORD_REDIRECT_URI
   if (!clientId || !redirectUri) {
-    throw new Error('Missing Discord OAuth environment variables')
+    throw new Error('Missing DISCORD_CLIENT_ID or DISCORD_REDIRECT_URI environment variables')
   }
 
   const query = getQuery(event)
+
   const requestedRedirect = typeof query.redirect === 'string' ? query.redirect : ''
   const safeRedirect = requestedRedirect.startsWith('/') ? requestedRedirect : ''
-  const requestedScope = typeof query.scope === 'string' ? query.scope : ''
-  const safeScope = requestedScope === 'chat' ? requestedScope : ''
 
-  // Keep legacy scope/redirect cookies in sync with the current request so
-  // the callback's state-mismatch recovery path can fall back to them when
-  // the state cookie has expired and no hint entries remain. The primary flow
-  // still uses the scope/redirect bundled inside the state entry; these are
-  // only a safety net for the expired-state case.
-  const legacyCookieOptions = {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 10
-  }
-  setCookie(event, 'discord_oauth_scope', safeScope, legacyCookieOptions)
-  setCookie(event, 'discord_oauth_redirect', safeRedirect, legacyCookieOptions)
+  const requestedScope = typeof query.scope === 'string' ? query.scope : ''
+  const safeScope = requestedScope === 'chat' ? 'chat' : ''
 
   const state = crypto.randomBytes(16).toString('hex')
-  const existingEntries = (() => {
-    try {
-      const raw = getCookie(event, 'discord_oauth_state')
-      const parsed = raw ? JSON.parse(raw) : []
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
-  })()
 
-  // Bundle scope and redirect into the state entry so they travel with the state
-  // through the OAuth flow and can't be lost or overwritten by concurrent logins.
-  const stateEntry = { v: state }
-  if (safeScope) stateEntry.scope = safeScope
-  if (safeRedirect) stateEntry.redirect = safeRedirect
-
-  // Keep at most the 5 most recent states to handle multiple concurrent login flows
-  const entries = [...existingEntries, stateEntry].slice(-5)
-  setCookie(event, 'discord_oauth_state', JSON.stringify(entries), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 10
-  })
+  setCookie(event, 'discord_state', state, oauthCookie(600))
+  setCookie(event, 'discord_scope', safeScope, oauthCookie(600))
+  setCookie(event, 'discord_redirect', safeRedirect, oauthCookie(600))
 
   const params = new URLSearchParams({
     client_id: clientId,
