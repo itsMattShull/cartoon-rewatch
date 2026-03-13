@@ -13,7 +13,11 @@ export default defineEventHandler(async (event) => {
   const code = query.code
   const state = query.state
   const cookieStateRaw = getCookie(event, 'discord_oauth_state')
-  const cookieStates = (() => {
+
+  // Parse state entries — new format is [{v, scope?, redirect?}, ...],
+  // old format (plain strings) is handled for backwards compatibility with
+  // any in-flight sessions that were started before this deploy.
+  const cookieStateEntries = (() => {
     try {
       const parsed = cookieStateRaw ? JSON.parse(cookieStateRaw) : []
       return Array.isArray(parsed) ? parsed : []
@@ -21,24 +25,45 @@ export default defineEventHandler(async (event) => {
       return []
     }
   })()
-  if (!code || !state || !cookieStates.includes(String(state))) {
+
+  function getEntryValue(entry) {
+    return typeof entry === 'object' && entry !== null ? entry.v : String(entry)
+  }
+
+  const matchingEntry = state
+    ? cookieStateEntries.find((e) => getEntryValue(e) === String(state))
+    : null
+
+  if (!code || !state || !matchingEntry) {
     // State mismatch: the cookie expired, was overwritten by a newer login attempt,
     // or the user navigated back and reused an old Discord redirect. Send them back
     // to login so they can start a fresh OAuth flow instead of showing a dead-end error.
-    // Preserve the scope and redirect cookies in the recovery URL so the login handler
-    // refreshes them with a new expiry — otherwise chat users lose their scope=chat
-    // context and receive a 403 after the recovery flow completes.
-    const recoveryScopeCookie = getCookie(event, 'discord_oauth_scope')
-    const recoveryRedirectCookie = getCookie(event, 'discord_oauth_redirect')
+    //
+    // Look for scope/redirect hints in the remaining state entries so that a chat
+    // user who hits a state mismatch still gets sent through the chat login path.
+    const hintEntry = cookieStateEntries.find(
+      (e) => typeof e === 'object' && e !== null && e.scope === 'chat'
+    )
     const recoveryParams = new URLSearchParams({ error: 'state_mismatch' })
-    if (recoveryScopeCookie === 'chat') recoveryParams.set('scope', 'chat')
-    if (recoveryRedirectCookie && recoveryRedirectCookie.startsWith('/')) {
-      recoveryParams.set('redirect', recoveryRedirectCookie)
+    if (hintEntry) {
+      recoveryParams.set('scope', 'chat')
+      if (hintEntry.redirect && hintEntry.redirect.startsWith('/')) {
+        recoveryParams.set('redirect', hintEntry.redirect)
+      }
+    } else {
+      // Backwards compatibility: fall back to separate cookies for old-format flows
+      const recoveryScopeCookie = getCookie(event, 'discord_oauth_scope')
+      const recoveryRedirectCookie = getCookie(event, 'discord_oauth_redirect')
+      if (recoveryScopeCookie === 'chat') recoveryParams.set('scope', 'chat')
+      if (recoveryRedirectCookie && recoveryRedirectCookie.startsWith('/')) {
+        recoveryParams.set('redirect', recoveryRedirectCookie)
+      }
     }
     return sendRedirect(event, `/api/auth/discord/login?${recoveryParams.toString()}`)
   }
+
   // Remove the consumed state so it can't be replayed
-  const remainingStates = cookieStates.filter((s) => s !== String(state))
+  const remainingEntries = cookieStateEntries.filter((e) => getEntryValue(e) !== String(state))
 
   const tokenBody = new URLSearchParams({
     client_id: clientId,
@@ -73,8 +98,14 @@ export default defineEventHandler(async (event) => {
   }
 
   const user = await userResponse.json()
-  const scopeCookie = getCookie(event, 'discord_oauth_scope')
-  const isChatScope = scopeCookie === 'chat'
+
+  // Read scope from the matched state entry (new format). Fall back to the
+  // separate scope cookie for old-format flows started before this deploy.
+  const entryScope =
+    typeof matchingEntry === 'object' && matchingEntry !== null ? matchingEntry.scope : null
+  const isChatScope =
+    entryScope === 'chat' || getCookie(event, 'discord_oauth_scope') === 'chat'
+
   if (!isChatScope && !isAllowedUser(user.id)) {
     throw createError({ statusCode: 403, statusMessage: 'Not authorized' })
   }
@@ -90,11 +121,19 @@ export default defineEventHandler(async (event) => {
     maxAge: 60 * 60 * 24 * 7
   })
 
-  const redirectCookie = getCookie(event, 'discord_oauth_redirect')
-  const safeRedirect = redirectCookie && redirectCookie.startsWith('/') ? redirectCookie : '/admin'
+  // Read redirect from matched state entry, fall back to legacy redirect cookie
+  const entryRedirect =
+    typeof matchingEntry === 'object' && matchingEntry !== null ? matchingEntry.redirect : null
+  const legacyRedirectCookie = getCookie(event, 'discord_oauth_redirect')
+  const safeRedirect =
+    entryRedirect && entryRedirect.startsWith('/')
+      ? entryRedirect
+      : legacyRedirectCookie && legacyRedirectCookie.startsWith('/')
+        ? legacyRedirectCookie
+        : '/admin'
 
-  if (remainingStates.length > 0) {
-    setCookie(event, 'discord_oauth_state', JSON.stringify(remainingStates), {
+  if (remainingEntries.length > 0) {
+    setCookie(event, 'discord_oauth_state', JSON.stringify(remainingEntries), {
       httpOnly: true,
       sameSite: 'lax',
       secure: process.env.NODE_ENV === 'production',
@@ -111,6 +150,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
+  // Clear legacy separate cookies (no-op if they don't exist)
   setCookie(event, 'discord_oauth_redirect', '', {
     httpOnly: true,
     sameSite: 'lax',

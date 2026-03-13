@@ -14,8 +14,20 @@ export default defineEventHandler((event) => {
   const requestedScope = typeof query.scope === 'string' ? query.scope : ''
   const safeScope = requestedScope === 'chat' ? requestedScope : ''
 
+  // Clear legacy separate scope/redirect cookies so stale values from old
+  // login flows can't interfere with the new state-bundled format.
+  const cookieOptions = {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0
+  }
+  setCookie(event, 'discord_oauth_scope', '', cookieOptions)
+  setCookie(event, 'discord_oauth_redirect', '', cookieOptions)
+
   const state = crypto.randomBytes(16).toString('hex')
-  const existingStates = (() => {
+  const existingEntries = (() => {
     try {
       const raw = getCookie(event, 'discord_oauth_state')
       const parsed = raw ? JSON.parse(raw) : []
@@ -24,35 +36,22 @@ export default defineEventHandler((event) => {
       return []
     }
   })()
+
+  // Bundle scope and redirect into the state entry so they travel with the state
+  // through the OAuth flow and can't be lost or overwritten by concurrent logins.
+  const stateEntry = { v: state }
+  if (safeScope) stateEntry.scope = safeScope
+  if (safeRedirect) stateEntry.redirect = safeRedirect
+
   // Keep at most the 5 most recent states to handle multiple concurrent login flows
-  const states = [...existingStates, state].slice(-5)
-  setCookie(event, 'discord_oauth_state', JSON.stringify(states), {
+  const entries = [...existingEntries, stateEntry].slice(-5)
+  setCookie(event, 'discord_oauth_state', JSON.stringify(entries), {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
     maxAge: 60 * 10
   })
-
-  if (safeRedirect) {
-    setCookie(event, 'discord_oauth_redirect', safeRedirect, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 60 * 10
-    })
-  }
-
-  if (safeScope) {
-    setCookie(event, 'discord_oauth_scope', safeScope, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      path: '/',
-      maxAge: 60 * 10
-    })
-  }
 
   const params = new URLSearchParams({
     client_id: clientId,
