@@ -108,7 +108,8 @@ async function fetchFromOfficialApi(videoId) {
   return {
     title: item?.snippet?.title || '',
     durationSeconds: parseIsoDuration(item?.contentDetails?.duration),
-    rawDuration: item?.contentDetails?.duration || ''
+    rawDuration: item?.contentDetails?.duration || '',
+    regionRestriction: item?.contentDetails?.regionRestriction || null
   }
 }
 
@@ -128,6 +129,7 @@ export default defineEventHandler(async (event) => {
   let title = ''
   let durationSeconds = 0
   let rawDuration = ''
+  let regionRestriction = null
   let lastError = null
 
   if (YOUTUBE_API_KEY) {
@@ -137,6 +139,7 @@ export default defineEventHandler(async (event) => {
         title = primary.title
         durationSeconds = primary.durationSeconds
         rawDuration = primary.rawDuration || ''
+        regionRestriction = primary.regionRestriction || null
       }
     } catch (error) {
       lastError = error
@@ -166,6 +169,7 @@ export default defineEventHandler(async (event) => {
     id: videoId,
     title,
     durationSeconds,
-    rawDuration
+    rawDuration,
+    regionRestriction
   }
 })
