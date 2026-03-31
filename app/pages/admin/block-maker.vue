@@ -285,6 +285,18 @@ function isRegionAllowed(list, region) {
   return !countries.includes(normalizedRegion)
 }
 
+function isYouTubeRegionAvailable(regionRestriction, code) {
+  if (!regionRestriction) return true
+  const upper = code.toUpperCase()
+  if (Array.isArray(regionRestriction.allowed)) {
+    return regionRestriction.allowed.map(r => r.toUpperCase()).includes(upper)
+  }
+  if (Array.isArray(regionRestriction.blocked)) {
+    return !regionRestriction.blocked.map(r => r.toUpperCase()).includes(upper)
+  }
+  return true
+}
+
 function stripUrlParams(value) {
   return String(value || '').split(/[?#]/)[0]
 }
@@ -573,7 +585,22 @@ async function updateVideoInfo(row, index) {
         return
       }
     }
-    setFetchStatus(index, apiResult?.title ? 'OK' : 'Not found')
+    if (!apiResult?.title) {
+      setFetchStatus(index, 'Not found')
+    } else {
+      const restriction = apiResult?.regionRestriction || null
+      const usOk = isYouTubeRegionAvailable(restriction, 'US')
+      const gbOk = isYouTubeRegionAvailable(restriction, 'GB')
+      if (!usOk && !gbOk) {
+        setFetchStatus(index, 'Not available in US or UK')
+      } else if (!usOk) {
+        setFetchStatus(index, 'Not available in US')
+      } else if (!gbOk) {
+        setFetchStatus(index, 'Not available in UK')
+      } else {
+        setFetchStatus(index, 'OK')
+      }
+    }
   } catch (error) {
     setFetchStatus(index, error?.message || 'Error')
   }
