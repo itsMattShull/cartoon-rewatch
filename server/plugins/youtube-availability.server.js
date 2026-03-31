@@ -6,7 +6,7 @@ import { getChannels } from '../utils/channels'
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
 const BLOCKS_DIR = 'assets/blocks'
 const INDEX_FILE = 'assets/blocks/blocks-index.json'
-const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
+const CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
 const DISCORD_CHANNEL_ID = '1465025785634099361'
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || ''
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || ''
@@ -206,7 +206,7 @@ async function sendDiscordAlert(issues) {
       const label = v.source === 'dailymotion' ? 'Dailymotion' : 'YouTube'
       message += `• [${label}] "${v.videoTitle}" (\`${v.videoId}\`) — Not available in ${v.missing}\n`
     }
-    const editPath = `/admin/block-maker?slug=${encodeURIComponent(blockSlug)}`
+    const editPath = `/admin/block-maker?block=${encodeURIComponent(blockSlug)}`
     if (PUBLIC_BASE_URL) {
       message += `Edit: ${PUBLIC_BASE_URL}${editPath}\n`
     }
