@@ -46,5 +46,5 @@ jobs:
                 npm ci
                 npm run build
 
-                pm2 restart 0 --update-env
+                pm2 restart ecosystem.config.cjs --update-env
               "'
