@@ -156,6 +156,38 @@ async function fetchDailymotionBatch(videoIds) {
   return result
 }
 
+async function sendDiscordMessage(content) {
+  try {
+    const response = await fetch(`https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content })
+    })
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.status)
+      console.error(`[youtube-availability] Discord message failed (${response.status}): ${text}`)
+    }
+  } catch (error) {
+    console.error('[youtube-availability] Discord send error', error)
+  }
+}
+
+async function sendStartupStatus() {
+  if (!DISCORD_BOT_TOKEN) return
+
+  const missing = []
+  if (!YOUTUBE_API_KEY) missing.push('`YOUTUBE_API_KEY`')
+
+  if (missing.length) {
+    await sendDiscordMessage(`❌ **YouTube availability monitor failed to start**\n\nMissing environment variable(s): ${missing.join(', ')}\n\nAvailability checks will not run until this is resolved.`)
+  } else {
+    await sendDiscordMessage(`✅ **YouTube availability monitor is running**\n\nAll environment variables are set. Availability checks run every ${CHECK_INTERVAL_MS / 3600000} hours.`)
+  }
+}
+
 async function sendDiscordAlert(issues) {
   const grouped = new Map()
   for (const issue of issues) {
@@ -193,18 +225,7 @@ async function sendDiscordAlert(issues) {
   }
 
   for (const chunk of chunks) {
-    try {
-      await fetch(`https://discord.com/api/v10/channels/${DISCORD_CHANNEL_ID}/messages`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ content: chunk })
-      })
-    } catch (error) {
-      console.error('[youtube-availability] Discord send error', error)
-    }
+    await sendDiscordMessage(chunk)
   }
 }
 
@@ -314,7 +335,9 @@ export default defineNitroPlugin(() => {
   globalThis.__crt80_ytavail_state = state
 
   setTimeout(() => {
-    checkAvailability(state).catch(err => console.error('[youtube-availability]', err))
+    sendStartupStatus()
+      .then(() => checkAvailability(state))
+      .catch(err => console.error('[youtube-availability]', err))
   }, 10000)
 
   setInterval(() => {
