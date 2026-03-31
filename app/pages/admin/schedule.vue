@@ -335,7 +335,7 @@ async function deleteEntry(entry) {
     })
     await refreshAll()
   } catch (error) {
-    alert('Failed to delete schedule entry. Check server logs for details.')
+    formError.value = 'Failed to delete schedule entry. Check server logs for details.'
   }
 }
 
@@ -345,9 +345,7 @@ async function saveSchedule() {
   formError.value = ''
   const startMs = getZonedDateUtcMs(formDate.value, formHour.value)
   if (!Number.isFinite(startMs) || startMs <= Date.now()) {
-    const message = 'Schedule time must be in the future.'
-    formError.value = message
-    alert(message)
+    formError.value = 'Schedule time must be in the future.'
     isSaving.value = false
     return
   }
@@ -365,10 +363,8 @@ async function saveSchedule() {
     await refreshAll()
     resetForm()
   } catch (error) {
-    const message =
+    formError.value =
       error?.data?.statusMessage || 'Failed to save schedule. Check server logs for details.'
-    formError.value = message
-    alert(message)
   } finally {
     isSaving.value = false
   }
@@ -387,7 +383,7 @@ async function refreshAll() {
     blocks.value = Array.isArray(blocksResponse?.blocks) ? blocksResponse.blocks : []
     scheduleEntries.value = normalizeEntries(scheduleResponse?.entries || [])
   } catch (error) {
-    alert('Failed to load schedule data. Check server logs for details.')
+    formError.value = 'Failed to load schedule data. Check server logs for details.'
   } finally {
     isLoading.value = false
   }
