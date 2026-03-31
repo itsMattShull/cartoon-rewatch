@@ -206,7 +206,7 @@ async function sendDiscordAlert(issues) {
       const label = v.source === 'dailymotion' ? 'Dailymotion' : 'YouTube'
       message += `• [${label}] "${v.videoTitle}" (\`${v.videoId}\`) — Not available in ${v.missing}\n`
     }
-    const editPath = `/admin/block-maker?slug=${encodeURIComponent(blockSlug)}`
+    const editPath = `/admin/block-maker?block=${encodeURIComponent(blockSlug)}`
     if (PUBLIC_BASE_URL) {
       message += `Edit: ${PUBLIC_BASE_URL}${editPath}\n`
     }
