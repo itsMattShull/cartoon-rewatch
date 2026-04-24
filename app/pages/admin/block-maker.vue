@@ -40,6 +40,7 @@
         <span>Length (sec)</span>
         <span>Status</span>
         <span></span>
+        <span></span>
       </div>
       <template v-for="(row, index) in rows" :key="row._uid">
         <div
@@ -88,6 +89,7 @@
           <input v-model.trim="row.title" type="text" class="cell-input" placeholder="Video title" />
           <input v-model.number="row.durationSeconds" type="number" min="0" class="cell-input" />
           <span class="cell-status">{{ getFetchStatus(index) }}</span>
+          <button class="see-times-btn secondary" type="button" @click="openSchedule(index)">See Times</button>
           <button class="delete-row" type="button" @click="removeRow(index)">Delete</button>
         </div>
         <div class="insert-line">
@@ -170,7 +172,10 @@
               <input v-model.number="row.durationSeconds" type="number" min="0" class="cell-input" />
             </label>
           </div>
-          <div class="card-status">Status: {{ getFetchStatus(index) || 'Idle' }}</div>
+          <div class="card-footer">
+            <span class="card-status">Status: {{ getFetchStatus(index) || 'Idle' }}</span>
+            <button class="see-times-btn secondary" type="button" @click="openSchedule(index)">See Times</button>
+          </div>
         </article>
         <div class="insert-line">
           <button
@@ -222,6 +227,29 @@
       </div>
     </div>
   </div>
+
+  <div v-if="isScheduleOpen" class="preview-overlay" @click.self="closeSchedule">
+    <div class="schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
+      <div class="preview-header">
+        <h3 id="schedule-title">{{ scheduleVideoTitle || 'Airtimes' }}</h3>
+        <button class="secondary" type="button" @click="closeSchedule">Close</button>
+      </div>
+      <div class="schedule-body">
+        <p v-if="scheduleGroups.length === 0" class="schedule-empty">
+          No airtimes available. Make sure all videos in this block have durations set.
+        </p>
+        <div v-for="group in scheduleGroups" :key="group.day" class="schedule-day-group">
+          <h4 class="schedule-day-name">{{ group.day }}</h4>
+          <ul class="schedule-time-list">
+            <li v-for="time in group.times" :key="time" class="schedule-time-item">{{ time }}</li>
+          </ul>
+        </div>
+      </div>
+      <div class="preview-footer">
+        <span class="status">All times in Central Standard Time (CST)</span>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -244,6 +272,9 @@ const isPreviewOpen = ref(false)
 const previewVideoId = ref('')
 const previewVideoSource = ref('youtube')
 const previewTitle = ref('')
+const isScheduleOpen = ref(false)
+const scheduleVideoIndex = ref(null)
+const scheduleVideoTitle = ref('')
 let videoUidCounter = 0
 
 function normalizeVideoSource(input) {
@@ -474,6 +505,111 @@ function formatClockOffset(seconds) {
   const mins = Math.floor((total % 3600) / 60)
   const secs = total % 60
   return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+const SCHEDULE_TZ = 'America/Chicago'
+
+function getTimeZoneOffsetMs(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(date)
+  const values = {}
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value
+  }
+  const asUTC = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  )
+  return asUTC - date.getTime()
+}
+
+function getSecondsSinceWeekStartInZone(date, timeZone) {
+  const offset = getTimeZoneOffsetMs(date, timeZone)
+  const zoned = new Date(date.getTime() + offset)
+  const dayOfWeek = zoned.getUTCDay()
+  return (
+    dayOfWeek * 86400 +
+    zoned.getUTCHours() * 3600 +
+    zoned.getUTCMinutes() * 60 +
+    zoned.getUTCSeconds()
+  )
+}
+
+function getVideoScheduleTimes(videoIndex) {
+  const totalDuration = rows.value.reduce((sum, v) => sum + (Number(v.durationSeconds) || 0), 0)
+  if (totalDuration === 0) return []
+  const videoStartSeconds = rows.value
+    .slice(0, videoIndex)
+    .reduce((sum, v) => sum + (Number(v.durationSeconds) || 0), 0)
+  const now = new Date()
+  const nowSeconds = Math.floor(now.getTime() / 1000)
+  const secondsSinceWeekStart = getSecondsSinceWeekStartInZone(now, SCHEDULE_TZ)
+  const sundayMidnightSeconds = nowSeconds - secondsSinceWeekStart
+  const windowEnd = nowSeconds + 7 * 24 * 3600
+  const firstPlaySeconds = sundayMidnightSeconds + videoStartSeconds
+  const kStart = Math.max(0, Math.ceil((nowSeconds - firstPlaySeconds) / totalDuration))
+  const times = []
+  for (let k = kStart; ; k++) {
+    const playSeconds = firstPlaySeconds + k * totalDuration
+    if (playSeconds > windowEnd) break
+    times.push(new Date(playSeconds * 1000))
+    if (times.length > 1000) break
+  }
+  return times
+}
+
+const scheduleGroups = computed(() => {
+  if (scheduleVideoIndex.value === null) return []
+  const times = getVideoScheduleTimes(scheduleVideoIndex.value)
+  const dayFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TZ,
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric'
+  })
+  const timeFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TZ,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  })
+  const groups = []
+  const groupIndex = new Map()
+  for (const date of times) {
+    const dayLabel = dayFmt.format(date)
+    const timeLabel = timeFmt.format(date)
+    if (groupIndex.has(dayLabel)) {
+      groups[groupIndex.get(dayLabel)].times.push(timeLabel)
+    } else {
+      groupIndex.set(dayLabel, groups.length)
+      groups.push({ day: dayLabel, times: [timeLabel] })
+    }
+  }
+  return groups
+})
+
+function openSchedule(index) {
+  scheduleVideoIndex.value = index
+  scheduleVideoTitle.value = rows.value[index]?.title || `Video ${index + 1}`
+  isScheduleOpen.value = true
+}
+
+function closeSchedule() {
+  isScheduleOpen.value = false
+  scheduleVideoIndex.value = null
+  scheduleVideoTitle.value = ''
 }
 
 function getStartSeconds(index) {
@@ -874,7 +1010,7 @@ watch(
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 36px 40px 90px 120px 1.1fr 110px 1.5fr 120px 120px 90px;
+  grid-template-columns: 36px 40px 90px 120px 1.1fr 110px 1.5fr 120px 120px 100px 90px;
   gap: 10px;
   align-items: center;
 }
@@ -1179,6 +1315,79 @@ watch(
 
 .preview-vignette {
   box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6);
+}
+
+.see-times-btn {
+  padding: 6px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.schedule-modal {
+  width: min(480px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #1a1b20, #2a2419 80%);
+  border-radius: 16px;
+  border: 1px solid #7c6845;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.schedule-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.schedule-empty {
+  margin: 0;
+  color: #cab688;
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.schedule-day-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schedule-day-name {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #f9d98f;
+  border-bottom: 1px solid rgba(124, 104, 69, 0.4);
+  padding-bottom: 6px;
+}
+
+.schedule-time-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.schedule-time-item {
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: #f7e4b4;
+  letter-spacing: 0.5px;
 }
 
 @media (max-width: 900px) {
