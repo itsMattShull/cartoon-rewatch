@@ -602,12 +602,13 @@ function getSecondsSinceWeekStartInZone(date, timeZone) {
   const offset = getTimeZoneOffsetMs(date, timeZone)
   const zoned = new Date(date.getTime() + offset)
   const dayOfWeek = zoned.getUTCDay()
-  return (
+  const secondsSinceSundayMidnight =
     dayOfWeek * 86400 +
     zoned.getUTCHours() * 3600 +
     zoned.getUTCMinutes() * 60 +
     zoned.getUTCSeconds()
-  )
+  // Week starts Friday at 8pm CST (504000 = 5*86400 + 20*3600)
+  return (secondsSinceSundayMidnight - 504000 + 604800) % 604800
 }
 
 function getZoneMinuteStart(date, timeZone) {
