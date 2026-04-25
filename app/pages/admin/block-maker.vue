@@ -539,12 +539,13 @@ function getSecondsSinceWeekStartInZone(date, timeZone) {
   const offset = getTimeZoneOffsetMs(date, timeZone)
   const zoned = new Date(date.getTime() + offset)
   const dayOfWeek = zoned.getUTCDay()
-  return (
+  const secondsSinceSundayMidnight =
     dayOfWeek * 86400 +
     zoned.getUTCHours() * 3600 +
     zoned.getUTCMinutes() * 60 +
     zoned.getUTCSeconds()
-  )
+  // Week starts Friday at 8pm CST (504000 = 5*86400 + 20*3600)
+  return (secondsSinceSundayMidnight - 504000 + 604800) % 604800
 }
 
 function getVideoScheduleTimes(videoIndex) {
@@ -556,9 +557,9 @@ function getVideoScheduleTimes(videoIndex) {
   const now = new Date()
   const nowSeconds = Math.floor(now.getTime() / 1000)
   const secondsSinceWeekStart = getSecondsSinceWeekStartInZone(now, SCHEDULE_TZ)
-  const sundayMidnightSeconds = nowSeconds - secondsSinceWeekStart
+  const weekStartSeconds = nowSeconds - secondsSinceWeekStart
   const windowEnd = nowSeconds + 7 * 24 * 3600
-  const firstPlaySeconds = sundayMidnightSeconds + videoStartSeconds
+  const firstPlaySeconds = weekStartSeconds + videoStartSeconds
   const kStart = Math.max(0, Math.ceil((nowSeconds - firstPlaySeconds) / totalDuration))
   const times = []
   for (let k = kStart; ; k++) {
