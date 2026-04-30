@@ -544,8 +544,8 @@ function getSecondsSinceWeekStartInZone(date, timeZone) {
     zoned.getUTCHours() * 3600 +
     zoned.getUTCMinutes() * 60 +
     zoned.getUTCSeconds()
-  // Week starts Friday at 8pm CST (504000 = 5*86400 + 20*3600)
-  return (secondsSinceSundayMidnight - 504000 + 604800) % 604800
+  // Week starts Friday at 7pm CST (500400 = 5*86400 + 19*3600)
+  return (secondsSinceSundayMidnight - 500400 + 604800) % 604800
 }
 
 function getVideoScheduleTimes(videoIndex) {
