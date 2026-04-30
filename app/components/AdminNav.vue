@@ -35,7 +35,8 @@ const isOpen = ref(false)
 const links = [
   { label: 'Admin Home', href: '/admin' },
   { label: 'Analytics', href: '/admin/analytics' },
-  { label: 'Block Maker', href: '/admin/block-maker' }
+  { label: 'Block Maker', href: '/admin/block-maker' },
+  { label: 'Settings', href: '/admin/settings' }
 ]
 
 function toggleNav() {

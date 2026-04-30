@@ -261,6 +261,13 @@ const router = useRouter()
 const { data: authData } = await useFetch('/api/auth/me')
 const isAuthorized = computed(() => authData.value?.authenticated && authData.value?.allowed)
 
+const { data: scheduleSettings } = await useFetch('/api/settings')
+const weekStartOffset = computed(() => {
+  const day = scheduleSettings.value?.scheduleDay ?? 5
+  const hour = scheduleSettings.value?.scheduleHour ?? 19
+  return day * 86400 + hour * 3600
+})
+
 const blockName = ref('')
 const blockSlug = ref('')
 const rows = ref([])
@@ -535,7 +542,7 @@ function getTimeZoneOffsetMs(date, timeZone) {
   return asUTC - date.getTime()
 }
 
-function getSecondsSinceWeekStartInZone(date, timeZone) {
+function getSecondsSinceWeekStartInZone(date, timeZone, weekStartOffsetSeconds = 500400) {
   const offset = getTimeZoneOffsetMs(date, timeZone)
   const zoned = new Date(date.getTime() + offset)
   const dayOfWeek = zoned.getUTCDay()
@@ -544,8 +551,7 @@ function getSecondsSinceWeekStartInZone(date, timeZone) {
     zoned.getUTCHours() * 3600 +
     zoned.getUTCMinutes() * 60 +
     zoned.getUTCSeconds()
-  // Week starts Friday at 7pm CST (500400 = 5*86400 + 19*3600)
-  return (secondsSinceSundayMidnight - 500400 + 604800) % 604800
+  return (secondsSinceSundayMidnight - weekStartOffsetSeconds + 604800) % 604800
 }
 
 function getVideoScheduleTimes(videoIndex) {
@@ -556,7 +562,7 @@ function getVideoScheduleTimes(videoIndex) {
     .reduce((sum, v) => sum + (Number(v.durationSeconds) || 0), 0)
   const now = new Date()
   const nowSeconds = Math.floor(now.getTime() / 1000)
-  const secondsSinceWeekStart = getSecondsSinceWeekStartInZone(now, SCHEDULE_TZ)
+  const secondsSinceWeekStart = getSecondsSinceWeekStartInZone(now, SCHEDULE_TZ, weekStartOffset.value)
   const weekStartSeconds = nowSeconds - secondsSinceWeekStart
   const windowEnd = nowSeconds + 7 * 24 * 3600
   const firstPlaySeconds = weekStartSeconds + videoStartSeconds

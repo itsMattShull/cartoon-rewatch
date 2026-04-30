@@ -403,6 +403,12 @@ const viewerCounts = ref({ total: 0, channels: {} })
 const viewerId = ref(null)
 const activePanel = ref('chat')
 const { data: authData } = await useFetch('/api/auth/me')
+const { data: scheduleSettings } = await useFetch('/api/settings')
+const weekStartOffset = computed(() => {
+  const day = scheduleSettings.value?.scheduleDay ?? 5
+  const hour = scheduleSettings.value?.scheduleHour ?? 19
+  return day * 86400 + hour * 3600
+})
 const isChatAuthorized = computed(() => authData.value?.authenticated)
 const chatUsername = computed(() => authData.value?.user?.username || '')
 const chatMessagesByChannel = ref({})
@@ -463,7 +469,7 @@ const scheduleInfo = computed(() => {
 
   const positionSeconds = Number.isFinite(scheduledStartMs)
     ? Math.max(0, Math.floor((nowMs - scheduledStartMs) / 1000))
-    : getSecondsSinceWeekStartInZone(now.value, scheduleTimeZone)
+    : getSecondsSinceWeekStartInZone(now.value, scheduleTimeZone, weekStartOffset.value)
 
   return getVideoAt(channel, positionSeconds)
 })
@@ -539,7 +545,7 @@ useHead({
   ]
 })
 const guideHeaderSegments = computed(() => {
-  const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone)
+  const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone, weekStartOffset.value)
   const minuteOfHour = Math.floor((startSeconds % 3600) / 60)
   const windowSeconds = guideHours * 3600
   const segments = []
@@ -598,7 +604,7 @@ function getTimeZoneOffsetMs(date, timeZone) {
   return asUTC - date.getTime()
 }
 
-function getSecondsSinceWeekStartInZone(date, timeZone) {
+function getSecondsSinceWeekStartInZone(date, timeZone, weekStartOffsetSeconds = 500400) {
   const offset = getTimeZoneOffsetMs(date, timeZone)
   const zoned = new Date(date.getTime() + offset)
   const dayOfWeek = zoned.getUTCDay()
@@ -607,8 +613,7 @@ function getSecondsSinceWeekStartInZone(date, timeZone) {
     zoned.getUTCHours() * 3600 +
     zoned.getUTCMinutes() * 60 +
     zoned.getUTCSeconds()
-  // Week starts Friday at 7pm CST (500400 = 5*86400 + 19*3600)
-  return (secondsSinceSundayMidnight - 500400 + 604800) % 604800
+  return (secondsSinceSundayMidnight - weekStartOffsetSeconds + 604800) % 604800
 }
 
 function getZoneMinuteStart(date, timeZone) {
@@ -783,7 +788,7 @@ function buildGuideBlocksForChannel(channel, windowStart, windowSeconds) {
     }
     const startSeconds = segment.scheduleStartMs
       ? Math.max(0, Math.floor((segment.startMs - segment.scheduleStartMs) / 1000))
-      : getSecondsSinceWeekStartInZone(new Date(segment.startMs), scheduleTimeZone)
+      : getSecondsSinceWeekStartInZone(new Date(segment.startMs), scheduleTimeZone, weekStartOffset.value)
     const segmentBlocks = buildGuideBlocks(playlist, startSeconds, segmentSeconds)
     for (const block of segmentBlocks) {
       blocks.push({
