@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, readBody } from 'h3'
-import { getSessionFromEvent } from '../../utils/auth'
+import { assertSameOrigin, requireAdmin } from '../../utils/auth'
 import {
   getChannels,
   normalizeChannelName,
@@ -11,10 +11,8 @@ import {
 const NAME_LIMIT = 16
 
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  assertSameOrigin(event)
+  const session = requireAdmin(event)
 
   const body = await readBody(event)
   const slug = normalizeChannelSlug(body?.slug)

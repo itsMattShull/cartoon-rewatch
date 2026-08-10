@@ -412,21 +412,13 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=VT323&family=Orbitron:wght@400;600&display=swap');
-
-:global(html),
-:global(body) {
-  margin: 0;
-  padding: 0;
-  background: #070707;
-}
-
 .schedule-page {
+  font-weight: 500;
   min-height: 100vh;
   padding: 24px;
-  background: radial-gradient(circle at top, #2b2e35 0%, #101015 45%, #070707 100%);
-  color: #f7f0d8;
-  font-family: 'Orbitron', sans-serif;
+  background: radial-gradient(circle at top, var(--cr-surface-page-top) 0%, var(--cr-surface-1) 45%, var(--cr-surface-root) 100%);
+  color: var(--cr-text);
+  font-family: var(--cr-font);
 }
 
 .schedule-header {
@@ -445,7 +437,7 @@ onBeforeUnmount(() => {
 
 .schedule-header p {
   margin: 0;
-  color: #d9caa3;
+  color: var(--cr-text-muted-1);
 }
 
 .schedule-actions {
@@ -475,7 +467,7 @@ onBeforeUnmount(() => {
 .panel {
   background: rgba(0, 0, 0, 0.35);
   border-radius: 14px;
-  border: 1px solid #5e4a2f;
+  border: 1px solid var(--cr-line-1);
   padding: 16px;
   display: grid;
   gap: 16px;
@@ -495,7 +487,7 @@ onBeforeUnmount(() => {
 
 .panel-sub {
   font-size: 12px;
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 .form-grid {
@@ -511,17 +503,17 @@ onBeforeUnmount(() => {
 }
 
 .field span {
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 input,
 select {
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid #7c6845;
-  background: #1a1b20;
-  color: #f7e4b4;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-line-2);
+  background: var(--cr-surface-3);
+  color: var(--cr-text-ctrl);
+  font-family: var(--cr-font);
 }
 
 .form-actions {
@@ -533,7 +525,7 @@ select {
 
 .form-actions .status {
   font-size: 12px;
-  color: #f3c488;
+  color: var(--cr-warning);
 }
 
 .actions {
@@ -544,10 +536,10 @@ select {
 .primary {
   padding: 10px 16px;
   border-radius: 10px;
-  border: 1px solid #f9d98f;
-  background: #3a2c1c;
-  color: #f7e4b4;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-accent);
+  background: var(--cr-surface-btn-top);
+  color: var(--cr-text-ctrl);
+  font-family: var(--cr-font);
   font-size: 14px;
   cursor: pointer;
   text-decoration: none;
@@ -559,10 +551,10 @@ select {
 .secondary {
   padding: 10px 16px;
   border-radius: 10px;
-  border: 1px solid #7c6845;
-  background: #1a1b20;
-  color: #f7e4b4;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-line-2);
+  background: var(--cr-surface-3);
+  color: var(--cr-text-ctrl);
+  font-family: var(--cr-font);
   font-size: 14px;
   cursor: pointer;
   text-decoration: none;
@@ -574,10 +566,10 @@ select {
 .danger {
   padding: 10px 14px;
   border-radius: 10px;
-  border: 1px solid #b85a4a;
-  background: #3a1d1d;
-  color: #fbd3c8;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-danger-border-2);
+  background: var(--cr-danger-bg-2);
+  color: var(--cr-danger-text-2);
+  font-family: var(--cr-font);
   font-size: 13px;
   cursor: pointer;
 }
@@ -587,7 +579,7 @@ select {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 .schedule-table {
@@ -607,14 +599,14 @@ select {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 .table-row {
   background: rgba(0, 0, 0, 0.35);
   border-radius: 12px;
   padding: 10px 12px;
-  border: 1px solid rgba(124, 104, 69, 0.5);
+  border: 1px solid rgba(37, 112, 158, 0.5);
 }
 
 .cell {
@@ -624,7 +616,7 @@ select {
 
 .cell small {
   font-size: 11px;
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 .cell.actions {
@@ -637,16 +629,16 @@ select {
   display: inline-flex;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid #7c6845;
-  color: #f7e4b4;
+  border: 1px solid var(--cr-line-2);
+  color: var(--cr-text-ctrl);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 1px;
 }
 
 .tag.current {
-  border-color: #f9d98f;
-  color: #f9d98f;
+  border-color: var(--cr-accent);
+  color: var(--cr-accent);
 }
 
 .empty,
@@ -654,7 +646,7 @@ select {
 .locked {
   padding: 24px;
   border-radius: 14px;
-  border: 1px solid #5e4a2f;
+  border: 1px solid var(--cr-line-1);
   background: rgba(0, 0, 0, 0.35);
   display: grid;
   gap: 12px;

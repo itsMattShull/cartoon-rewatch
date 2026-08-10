@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
-import { getSessionFromEvent } from '../../utils/auth'
+import { assertSameOrigin, requireAdmin } from '../../utils/auth'
 import { getChannels } from '../../utils/channels'
 import { broadcastToViewers } from '../../utils/viewer-broadcast'
 
@@ -23,10 +23,8 @@ function safeParseJson(raw, fallback) {
 }
 
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  assertSameOrigin(event)
+  const session = requireAdmin(event)
 
   const body = await readBody(event)
   const channelSlug = normalizeSlug(body?.channelSlug)

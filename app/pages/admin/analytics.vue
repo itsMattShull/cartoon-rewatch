@@ -305,7 +305,7 @@ function buildChartConfig({ labels, data, projectedData, label, color, yMax }) {
     datasets.push({
       label: `${label} (Projected)`,
       data: projectedData,
-      borderColor: '#ffcf5a',
+      borderColor: 'var(--cr-chart-projected)',
       backgroundColor: 'transparent',
       fill: false,
       showLine: false,
@@ -392,7 +392,7 @@ async function renderCharts() {
       data: uniqueSeries,
       projectedData: uniqueProjectedSeries,
       label: 'Unique Viewers',
-      color: '#f9d98f'
+      color: '#9fe0ff'
     })
     if (!uniqueChart) {
       uniqueChart = new Chart(uniqueCanvas.value, uniqueConfig)
@@ -408,7 +408,7 @@ async function renderCharts() {
       labels,
       data: returningSeries,
       label: 'Returning %',
-      color: '#7fe3ff',
+      color: 'var(--cr-chart-2)',
       yMax: 100
     })
     if (!returningChart) {
@@ -426,7 +426,7 @@ async function renderCharts() {
       data: viewsSeries,
       projectedData: viewsProjectedSeries,
       label: 'Total Visits',
-      color: '#f7a8ff'
+      color: 'var(--cr-chart-3)'
     })
     if (!viewsChart) {
       viewsChart = new Chart(viewsCanvas.value, viewsConfig)
@@ -478,27 +478,13 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=VT323&family=Orbitron:wght@400;600&display=swap');
-
-:global(html),
-:global(body) {
-  margin: 0;
-  padding: 0;
-  background: #070707;
-}
-
-:global(*),
-:global(*::before),
-:global(*::after) {
-  box-sizing: border-box;
-}
-
 .analytics-page {
+  font-weight: 500;
   min-height: 100vh;
   padding: clamp(16px, 4vw, 28px);
-  background: radial-gradient(circle at top, #2b2e35 0%, #101015 45%, #070707 100%);
-  color: #f7f0d8;
-  font-family: 'Orbitron', sans-serif;
+  background: radial-gradient(circle at top, var(--cr-surface-page-top) 0%, var(--cr-surface-1) 45%, var(--cr-surface-root) 100%);
+  color: var(--cr-text);
+  font-family: var(--cr-font);
 }
 
 .analytics-header {
@@ -508,8 +494,8 @@ onBeforeUnmount(() => {
   gap: 16px;
   padding: 16px 20px;
   border-radius: 14px;
-  border: 2px solid #a88c5a;
-  background: linear-gradient(90deg, #1f2024, #2f2b20 60%, #3b2b17);
+  border: 2px solid var(--cr-line-3);
+  background: linear-gradient(90deg, var(--cr-surface-4), var(--cr-surface-titlebar-mid) 60%, var(--cr-surface-titlebar-end));
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
   margin-bottom: 24px;
 }
@@ -518,12 +504,12 @@ onBeforeUnmount(() => {
   margin: 0 0 6px 0;
   font-size: 26px;
   letter-spacing: 3px;
-  color: #f9d98f;
+  color: var(--cr-accent);
 }
 
 .analytics-header p {
   margin: 0;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
   font-size: 13px;
   letter-spacing: 1px;
 }
@@ -553,21 +539,21 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 2px;
-  color: #d7c7a4;
+  color: var(--cr-text-muted-2);
 }
 
 .field select {
   padding: 8px 10px;
   border-radius: 8px;
-  border: 1px solid #a88c5a;
-  background: #141518;
-  color: #f7f0d8;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-line-3);
+  background: var(--cr-surface-2);
+  color: var(--cr-text);
+  font-family: var(--cr-font);
 }
 
 .status {
   font-size: 12px;
-  color: #d7c7a4;
+  color: var(--cr-text-muted-2);
 }
 
 .error {
@@ -576,7 +562,7 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   border: 1px solid rgba(255, 120, 120, 0.6);
   background: rgba(120, 20, 20, 0.35);
-  color: #ffb7b7;
+  color: var(--cr-error-text);
   font-size: 12px;
 }
 
@@ -590,8 +576,8 @@ onBeforeUnmount(() => {
 .summary-card {
   padding: 14px 16px;
   border-radius: 12px;
-  border: 1px solid #a88c5a;
-  background: rgba(17, 18, 22, 0.8);
+  border: 1px solid var(--cr-line-3);
+  background: rgba(14, 19, 25, 0.8);
   box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
@@ -602,17 +588,18 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 2px;
-  color: #d7c7a4;
+  color: var(--cr-text-muted-2);
 }
 
 .summary-value {
+  font-variant-numeric: tabular-nums;
   font-size: 28px;
-  color: #fdf0c2;
+  color: var(--cr-text-bright);
 }
 
 .summary-sub {
   font-size: 12px;
-  color: #bfa981;
+  color: var(--cr-text-dim-1);
 }
 
 .charts {
@@ -627,8 +614,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 16px;
   border-radius: 14px;
-  border: 1px solid #a88c5a;
-  background: rgba(12, 13, 16, 0.9);
+  border: 1px solid var(--cr-line-3);
+  background: rgba(11, 17, 24, 0.9);
   height: 280px;
 }
 
@@ -657,12 +644,12 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 16px;
   letter-spacing: 1.5px;
-  color: #f9d98f;
+  color: var(--cr-accent);
 }
 
 .chart-sub {
   font-size: 11px;
-  color: #bfa981;
+  color: var(--cr-text-dim-1);
 }
 
 .channels {
@@ -685,7 +672,7 @@ onBeforeUnmount(() => {
 .channels-table {
   display: grid;
   border-radius: 12px;
-  border: 1px solid #a88c5a;
+  border: 1px solid var(--cr-line-3);
   overflow: hidden;
 }
 
@@ -698,23 +685,23 @@ onBeforeUnmount(() => {
 }
 
 .table-head {
-  background: #1f2024;
+  background: var(--cr-surface-4);
   text-transform: uppercase;
   font-size: 11px;
   letter-spacing: 2px;
-  color: #d7c7a4;
+  color: var(--cr-text-muted-2);
 }
 
 .table-row {
-  border-top: 1px solid rgba(168, 140, 90, 0.3);
-  background: rgba(12, 13, 16, 0.85);
+  border-top: 1px solid rgba(64, 150, 198, 0.3);
+  background: rgba(11, 17, 24, 0.85);
 }
 
 .empty {
   padding: 18px;
   border-radius: 12px;
-  border: 1px dashed rgba(168, 140, 90, 0.5);
-  color: #bfa981;
+  border: 1px dashed rgba(64, 150, 198, 0.5);
+  color: var(--cr-text-dim-1);
   text-align: center;
 }
 
@@ -722,13 +709,13 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 40px 16px;
   border-radius: 16px;
-  border: 1px solid #a88c5a;
-  background: rgba(15, 16, 20, 0.8);
+  border: 1px solid var(--cr-line-3);
+  background: rgba(12, 17, 23, 0.8);
 }
 
 .locked h2 {
   margin-bottom: 8px;
-  color: #f9d98f;
+  color: var(--cr-accent);
 }
 
 .primary,
@@ -739,19 +726,19 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 10px 16px;
   border-radius: 10px;
-  border: 1px solid #a88c5a;
+  border: 1px solid var(--cr-line-3);
   text-decoration: none;
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--cr-font);
   cursor: pointer;
 }
 
 .primary {
-  background: #f9d98f;
-  color: #1c1b17;
+  background: var(--cr-brand-700);
+  color: #ffffff;
 }
 
 .secondary {
-  background: #1f2024;
-  color: #f7f0d8;
+  background: var(--cr-surface-4);
+  color: var(--cr-text);
 }
 </style>

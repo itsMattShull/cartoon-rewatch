@@ -69,9 +69,9 @@ watch(
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  border: 1px solid #a88c5a;
-  background: rgba(20, 20, 24, 0.9);
-  color: #f9d98f;
+  border: 1px solid var(--cr-line-3);
+  background: rgba(17, 22, 28, 0.9);
+  color: var(--cr-accent);
   font-size: 20px;
   display: inline-flex;
   align-items: center;
@@ -82,7 +82,7 @@ watch(
 .admin-nav-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(5, 5, 8, 0.6);
+  background: rgba(3, 6, 10, 0.6);
   z-index: 41;
 }
 
@@ -92,8 +92,8 @@ watch(
   left: 0;
   height: 100%;
   width: min(320px, 82vw);
-  background: #141517;
-  border-right: 2px solid #a88c5a;
+  background: var(--cr-surface-2);
+  border-right: 2px solid var(--cr-line-3);
   box-shadow: 12px 0 24px rgba(0, 0, 0, 0.5);
   transform: translateX(-100%);
   transition: transform 0.2s ease;
@@ -117,14 +117,14 @@ watch(
 .admin-nav-title {
   font-size: 18px;
   letter-spacing: 2px;
-  color: #f9d98f;
-  font-family: 'Orbitron', sans-serif;
+  color: var(--cr-accent);
+  font-family: var(--cr-font);
 }
 
 .admin-nav-close {
-  border: 1px solid #a88c5a;
+  border: 1px solid var(--cr-line-3);
   background: transparent;
-  color: #f7f0d8;
+  color: var(--cr-text);
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 12px;
@@ -138,19 +138,19 @@ watch(
 
 .admin-nav-links a {
   text-decoration: none;
-  color: #f7f0d8;
+  color: var(--cr-text);
   border-radius: 10px;
   padding: 10px 12px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.03);
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--cr-font);
   letter-spacing: 1px;
 }
 
 .admin-nav-links a.active {
-  border-color: #a88c5a;
-  color: #f9d98f;
-  background: rgba(249, 217, 143, 0.08);
+  border-color: var(--cr-line-3);
+  color: var(--cr-accent);
+  background: rgba(159, 224, 255, 0.08);
 }
 
 .sr-only {

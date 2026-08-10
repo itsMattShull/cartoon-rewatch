@@ -1,0 +1,157 @@
+/*
+ * Cartoon ReWatch theme tokens.
+ *
+ * One shared sheet instead of ~450 hardcoded colours spread across 7 .vue files.
+ * Custom properties inherit through Vue's scoped-style boundary, so `var(--cr-*)`
+ * works unchanged inside every existing <style scoped> block.
+ *
+ * Palette: anchored on the brand blue #227DB6. Old warm values were converted via
+ * CIELAB with L* preserved, so the original lightness ladder survives the recolour.
+ *
+ * Contrast rules that matter:
+ *   - #227DB6 measures 3.0:1 on the lightest page background, so it is a BORDER and
+ *     FILL colour only. It is never used for text.
+ *   - Text uses the lighter tints (--cr-accent, --cr-text-*), all of which clear
+ *     WCAG AA 4.5:1 against every surface they sit on.
+ *   - Status colours stay warm on purpose: success/error/danger are distinguished by
+ *     hue, and an all-blue palette would make "Saved" and "Failed" — and Save and
+ *     Delete — identical but for their text.
+ */
+
+:root {
+  /* Surfaces, darkest to lightest */
+  --cr-surface-root: #03080e;
+  --cr-surface-void: #03060a;
+  --cr-surface-screen-in: #070d14;
+  --cr-surface-1: #0b1118;
+  --cr-surface-2: #11161c;
+  --cr-surface-3: #151c25;
+  --cr-surface-screen-off: #161c23;
+  --cr-surface-screen: #171d24;
+  --cr-surface-4: #18212b;
+  --cr-surface-btn-bot: #0c2336;
+  --cr-surface-panel-bot: #142739;
+  --cr-surface-titlebar-mid: #1c2d3e;
+  --cr-surface-page-top: #252f3b;
+  --cr-surface-btn-top: #0e334d;
+  --cr-surface-titlebar-end: #0d324c;
+  --cr-surface-glow: #00435b;
+
+  /* TV cabinet. Deliberately low chroma so the bezel still reads as a separate
+     material now that hue no longer separates it from the page. */
+  --cr-bezel-0: #313f4c;
+  --cr-bezel-40: #445767;
+  --cr-bezel-100: #212d39;
+  --cr-bezel-rim: #6f879b;
+
+  /* Structure: borders and rules. Non-text, so >=3:1 is the bar. */
+  --cr-line-subtle: #11486a;
+  --cr-line-1: #105279;
+  --cr-line-2: #25709e;
+  --cr-line-3: #4096c6;
+  --cr-line-strong: #359acc;
+  --cr-slider-track-0: #016794;
+  --cr-slider-track-1: #cbe9ff;
+
+  /* Text */
+  --cr-text: #e4f1f9;
+  --cr-text-bright: #e2f5fe;
+  --cr-text-ctrl: #c0e7fa;
+  --cr-text-lcd: #bce3f6;
+  --cr-text-muted-1: #a5cee3;
+  --cr-text-muted-2: #a3cbe0;
+  --cr-text-muted-3: #82c3dd;
+  --cr-text-muted-4: #89bdd6;
+  --cr-text-muted-5: #80bbd6;
+  --cr-text-muted-6: #80b7d1;
+  --cr-text-dim-1: #77b0cc;
+  --cr-text-dim-2: #75afca;
+  --cr-on-accent: #151b22;
+
+  /* Accent: replaces the old gold. Light enough to be body text anywhere. */
+  --cr-accent: #9fe0ff;
+  --cr-accent-glow: rgba(164, 227, 255, 0.4);
+  --cr-accent-soft: rgba(159, 224, 255, 0.08);
+  --cr-accent-soft-2: rgba(159, 224, 255, 0.12);
+  --cr-accent-border: rgba(159, 224, 255, 0.8);
+
+  /* Brand scale anchored on #227DB6 */
+  --cr-brand-700: #0479af;
+  --cr-brand-600: #088ecd;
+  --cr-brand-500: #227db6;
+  --cr-brand-400: #0ba0df;
+  --cr-brand-300: #16b1f0;
+  --cr-brand-200: #58c5f1;
+
+  /* Composite surfaces that only ever existed as rgba() */
+  --cr-guide-block-0: #102c42;
+  --cr-guide-block-1: #0e1b27;
+  --cr-chip-grad-0: #102a3e;
+  --cr-chip-grad-1: #0e1d2a;
+  --cr-scrim-overlay: rgba(16, 26, 37, 0.85);
+  --cr-scrim-modal-head: rgba(10, 18, 25, 0.7);
+
+  /* Status: intentionally NOT blue (see header note) */
+  --cr-success: #8fcd9e;
+  --cr-warning: #f3c488;
+  --cr-error-text: #ffb7b7;
+  --cr-danger-border: #b45b4f;
+  --cr-danger-border-2: #b85a4a;
+  --cr-danger-bg: #2b1519;
+  --cr-danger-bg-2: #3a1d1d;
+  --cr-danger-text: #f0c6b4;
+  --cr-danger-text-2: #fbd3c8;
+
+  /* Charts: separated by hue, so they must not all become blue. */
+  --cr-chart-1: #9fe0ff;
+  --cr-chart-2: #7fe3ff;
+  --cr-chart-3: #f7a8ff;
+  --cr-chart-projected: #ffcf5a;
+  --cr-chart-axis: #89bdd6;
+
+  /* Typography.
+     Futura is a real system face on macOS/iOS; Jost is the metric-compatible free
+     stand-in everywhere else. Jost's stems are far lighter than Orbitron's, so the
+     UI base weight is 500, not 400. */
+  --cr-font: 'Futura', 'Futura PT', 'Jost', 'Century Gothic', sans-serif;
+  /* Kept monospace on purpose: video IDs and timecodes are read and copied by eye,
+     and Jost's I/l are nearly identical with no slashed zero. */
+  --cr-font-mono: ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  font-synthesis-weight: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--cr-surface-root);
+}
+
+/* Before this, the whole app had exactly one :focus-visible rule, so keyboard focus
+   was effectively invisible on a near-black background. */
+:focus-visible {
+  outline: 2px solid var(--cr-brand-400);
+  outline-offset: 2px;
+}
+
+::placeholder {
+  color: var(--cr-text-dim-2);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

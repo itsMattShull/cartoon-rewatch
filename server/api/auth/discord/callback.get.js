@@ -1,5 +1,5 @@
 import { defineEventHandler, getQuery, getCookie, setCookie, sendRedirect, createError } from 'h3'
-import { getSessionCookieName, isAllowedUser, signSession } from '../../../utils/auth'
+import { getSessionCookieName, isAllowedUser, safeRedirectPath, signSession } from '../../../utils/auth'
 
 function clearCookie(event, name) {
   setCookie(event, name, '', {
@@ -74,14 +74,20 @@ export default defineEventHandler(async (event) => {
   const discriminator = user.discriminator && user.discriminator !== '0' ? `#${user.discriminator}` : ''
   const username = user.username ? `${user.username}${discriminator}` : user.id
 
-  setCookie(event, getSessionCookieName(), signSession({ id: user.id, username }), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: 60 * 60 * 24 * 7
-  })
+  const sessionScope = isChatScope ? 'chat' : 'admin'
+  setCookie(
+    event,
+    getSessionCookieName(),
+    signSession({ id: user.id, username }, 60 * 60 * 24 * 7, sessionScope),
+    {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7
+    }
+  )
 
-  const destination = savedRedirect && savedRedirect.startsWith('/') ? savedRedirect : '/admin'
+  const destination = safeRedirectPath(savedRedirect, '/admin')
   return sendRedirect(event, destination)
 })

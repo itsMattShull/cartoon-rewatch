@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
-import { getSessionFromEvent } from '../../utils/auth'
+import { assertSameOrigin, requireAdmin } from '../../utils/auth'
 
 const CHANNEL_FILES = {
   'toonami': 'assets/channels/toonami.json',
@@ -30,10 +30,8 @@ function sanitizePayload(payload, fallbackName) {
 }
 
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  assertSameOrigin(event)
+  const session = requireAdmin(event)
 
   const body = await readBody(event)
   const slug = normalizeSlug(body?.slug)
