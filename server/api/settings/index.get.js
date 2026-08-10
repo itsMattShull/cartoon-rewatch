@@ -1,6 +1,6 @@
 import { defineEventHandler } from 'h3'
 import { readSettings } from '../../utils/settings'
-import { defaultBanners, readBanners } from '../../utils/banners'
+import { defaultBanners, readBanners, withResolvedTagline } from '../../utils/banners'
 
 // Public. The front page already awaits this during SSR, so banners ride along here
 // rather than costing a third blocking request on the site's busiest route.
@@ -15,5 +15,5 @@ export default defineEventHandler(async () => {
     // rather than failing the whole page render.
     banners = defaultBanners()
   }
-  return { ...settings, banners }
+  return { ...settings, banners: withResolvedTagline(banners) }
 })

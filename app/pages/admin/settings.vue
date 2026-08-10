@@ -60,6 +60,32 @@
 
       <div class="panel">
         <div class="panel-header">
+          <h2>Header Tagline</h2>
+          <span class="panel-sub">The line under "Cartoon ReWatch"</span>
+        </div>
+
+        <label class="field">
+          <span>
+            Tagline
+            <em class="counter" :class="{ over: taglineChars > MAX_TAGLINE }">
+              {{ taglineChars }}/{{ MAX_TAGLINE }}
+            </em>
+          </span>
+          <input
+            type="text"
+            v-model="bannerForm.tagline.text"
+            :maxlength="MAX_TAGLINE"
+            placeholder="Grab cereal and enjoy."
+          />
+        </label>
+        <p class="hint">
+          Leave this empty to hide the line entirely. Saved with the Save Banners button
+          at the bottom of this page.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
           <h2>Announcement Banner</h2>
           <span class="panel-sub">Shown across the top of the front page</span>
         </div>
@@ -226,17 +252,22 @@
           </div>
         </div>
 
-        <div class="form-actions">
-          <button
-            class="secondary"
-            type="button"
-            :disabled="bannerForm.ads.length >= MAX_ADS"
-            @click="addAd"
-          >
-            Add banner
-          </button>
+        <button
+          class="secondary"
+          type="button"
+          :disabled="bannerForm.ads.length >= MAX_ADS"
+          @click="addAd"
+        >
+          Add banner
+        </button>
+
+        <!-- Sticky: this one button saves the tagline, announcement and channel-strip
+             panels too, and on a phone those sit several screens above it. -->
+        <div class="banner-save-bar">
+          <div class="status" :class="{ error: isBannerError }">
+            {{ bannerStatus || (hasBannerChanges ? 'Unsaved changes' : '') }}
+          </div>
           <div class="actions">
-            <div class="status" :class="{ error: isBannerError }">{{ bannerStatus }}</div>
             <button class="secondary" type="button" :disabled="isSavingBanners" @click="resetBanners">
               Reset
             </button>
@@ -285,9 +316,14 @@ const MAX_ADS = 6
 const MAX_ANNOUNCEMENT = 140
 const MAX_STRIP = 40
 const MAX_ALT = 120
+const MAX_TAGLINE = 48
 
+// These two functions and the server's normalizeBanners must list the same fields.
+// /api/banners/save replaces the whole config rather than patching it, so any key
+// missing here is silently erased on every save from this page.
 function emptyBanners() {
   return {
+    tagline: { text: '' },
     announcement: { enabled: false, text: '', linkUrl: '', linkLabel: '' },
     channelStrip: { enabled: false, text: '', linkUrl: '' },
     ads: []
@@ -298,6 +334,7 @@ function cloneBanners(source) {
   const base = emptyBanners()
   if (!source) return base
   return {
+    tagline: { ...base.tagline, ...(source.tagline || {}) },
     announcement: { ...base.announcement, ...(source.announcement || {}) },
     channelStrip: { ...base.channelStrip, ...(source.channelStrip || {}) },
     ads: (source.ads || []).map((ad) => ({ ...ad }))
@@ -312,6 +349,14 @@ const uploadingIndex = ref(-1)
 
 const announcementChars = computed(() => bannerForm.value.announcement.text.length)
 const stripChars = computed(() => bannerForm.value.channelStrip.text.length)
+// Count by code point so the counter agrees with the server's cap, which slices the
+// same way — otherwise an emoji reads as 2 characters here and 1 there.
+const taglineChars = computed(() => Array.from(bannerForm.value.tagline.text || '').length)
+
+const hasBannerChanges = computed(() => {
+  const saved = cloneBanners(settingsData.value?.banners)
+  return JSON.stringify(saved) !== JSON.stringify(bannerForm.value)
+})
 
 function addAd() {
   if (bannerForm.value.ads.length >= MAX_ADS) return
@@ -457,7 +502,8 @@ async function saveSettings() {
 .settings-page {
   font-weight: 500;
   min-height: 100vh;
-  padding: 24px;
+  /* Matches the front page. A flat 24px burns 48px of a 375px viewport. */
+  padding: clamp(14px, 3vw, 24px);
   background: radial-gradient(circle at top, var(--cr-surface-page-top) 0%, var(--cr-surface-1) 45%, var(--cr-surface-root) 100%);
   color: var(--cr-text);
   font-family: var(--cr-font);
@@ -535,12 +581,15 @@ async function saveSettings() {
 
 select {
   padding: 10px 12px;
+  min-height: 44px;
   border-radius: 10px;
   border: 1px solid var(--cr-line-2);
   background: var(--cr-surface-3);
   color: var(--cr-text-ctrl);
   font-family: var(--cr-font);
-  font-size: 13px;
+  /* 16px for the same reason as the text inputs below: iOS Safari auto-zooms any form
+     control under 16px on focus, and that applies to <select> too. */
+  font-size: 16px;
 }
 
 .current-setting {
@@ -782,6 +831,36 @@ input[type='url'] {
   .banner-actions {
     flex-direction: row;
     justify-content: flex-end;
+  }
+}
+
+.banner-save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px;
+  /* Without the safe-area inset the button sits under the iPhone home indicator. */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  margin: 0 -20px -20px;
+  background: var(--cr-surface-2, rgba(6, 14, 22, 0.96));
+  border-top: 1px solid var(--cr-line-1);
+}
+
+.banner-save-bar .actions {
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  .banner-save-bar .actions {
+    width: 100%;
+  }
+
+  .banner-save-bar .actions > button {
+    flex: 1;
   }
 }
 

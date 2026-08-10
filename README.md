@@ -9,7 +9,7 @@ The app plays channel blocks (YouTube and Dailymotion), supports live channel sw
 - 24/7 channel playback with a TV-style UI
 - Multiple channels with per-channel active blocks
 - Block Maker for creating/editing playlists
-- Schedule editor (times stored in `America/Chicago`)
+- Schedule editor with one-off entries and repeating blocks (times stored in `America/Chicago`)
 - Live viewer counts and channel chat via WebSockets (`/api/viewers`)
 - Discord OAuth for authentication
 - Admin analytics dashboard (unique viewers, returning %, visits, channel breakdown)
@@ -96,9 +96,48 @@ Runtime-only state lives under `.data/` (gitignored, preserved across deploys):
 > `git pull` will abort with "local changes would be overwritten" — after `pm2 stop`
 > has already run. Moving them into `.data/` would remove that risk.
 
+## Scheduling
+
+`assets/schedules/schedules.json` holds two things per channel:
+
+- `channels[slug]` — one-off entries, `{ id, blockSlug, startTime }` at an absolute UTC instant.
+- `recurring[slug]` — repeating rules, `{ id, blockSlug, days, hour, minute, startDate,
+  endDate, exceptions, enabled }`. Days are `0`–`6` (Sunday first) in `America/Chicago`,
+  `endDate` is **inclusive**, and `exceptions` is a list of `YYYY-MM-DD` civil dates to skip
+  (that's what the "Skip" button on a single airing writes).
+
+Rules are stored once and expanded on read, never pre-generated into rows. `/api/schedule`
+ships the raw rules and the browser expands them with `shared/schedule-time.js` — the same
+module the server uses. That keeps the whole system deterministic by clock: a tab left open
+for a week computes the same schedule as one loaded a second ago, which a server-side
+expansion window could not guarantee.
+
+All zone conversion goes through `zonedWallToUtc()` in `shared/schedule-time.js`. It solves
+two candidate instants and checks each for self-consistency rather than correcting a single
+guess — the single-pass form it replaced was wrong by an hour for about ten hours a year
+around the DST transitions, could make two different hours resolve to the same instant, and
+left one local hour unreachable on the fall-back date. Non-existent local times (the
+spring-forward gap) shift forward preserving minutes; ambiguous ones (the fall-back fold)
+take the first occurrence and never fire twice.
+
+`server/plugins/schedule.server.js` reconciles to the desired state — "what should be active
+right now" — rather than scanning for what became due since the last tick. It runs once at
+startup and then on each wall-clock minute, so a deploy spanning an occurrence heals itself
+instead of skipping that occurrence forever. It compares the applied *occurrence key* stored
+in `.data/schedule-state.json`, not the block slug, which is what makes it idempotent and what
+lets a manual block switch (`/api/blocks/active`) survive until a genuinely new occurrence
+begins.
+
 ## Banners
 
 Banners are edited at `/admin/settings` and stored in `.data/banners.json`:
+
+- **Header tagline** - the line under "Cartoon ReWatch". An absent key renders the built-in
+  default (`Grab cereal and enjoy.`); an empty string hides the line. Note that
+  `/api/banners/save` replaces the whole config rather than patching it, so any new field
+  must be added to `DEFAULTS` and `normalizeBanners` in `server/utils/banners.js` *and* to
+  `emptyBanners()`/`cloneBanners()` in `app/pages/admin/settings.vue`, or it is erased on
+  every save.
 
 - **Announcement banner** - dismissible bar at the top of the front page. Dismissal is
   keyed to the message text, so editing the text re-shows it to everyone.
@@ -136,6 +175,27 @@ Default channel payloads currently exist in:
   `scope === 'admin'` *and* membership of `DISCORD_ALLOWED_IDS`.
 - Admin write endpoints also call `assertSameOrigin()`, which requires a same-origin
   `Origin` header. Calling them from curl needs `-H "Origin: https://<your-host>"`.
+- Admin **read** endpoints go through `requireAdmin()` too — `/api/analytics`, `/api/blocks`,
+  `/api/schedule/<channel>`, `/api/youtube-info` and `/api/dailymotion-info`. A signed-in
+  chat user is not an admin, so "is there a session" is not a gate.
+
+### OAuth state
+
+The `state` parameter is an HMAC-signed token carrying `{nonce, scope, redirect, attempt}`,
+and `discord_state` holds the nonce. Both are required to complete a login:
+
+- The signature proves *we* minted the state. It proves nothing about **which browser**, so a
+  missing or mismatched cookie never completes the login — the `code` is discarded unexchanged
+  and the flow restarts, carrying the original scope and redirect. Previously a lost cookie
+  silently downgraded a chat login to an admin login, and any non-allow-listed user then hit a
+  hard `403 Not authorized`.
+- `attempt` bounds that retry to one round, so a browser that never returns the cookie (an
+  apex vs `www.` mismatch against `DISCORD_REDIRECT_URI` does this) lands on a readable error
+  instead of looping through Discord forever. **If users still hit this, fix the host
+  mismatch** — set the OAuth cookies' domain or redirect apex→www at the edge.
+- State tokens are signed with an HKDF-derived key separate from `SESSION_SECRET`, and the MAC
+  input is domain-separated. Both token types are `base64url(json).hmac`, so without this a
+  state handed to an anonymous caller could be replayed as a session cookie.
 
 ## Deployment
 

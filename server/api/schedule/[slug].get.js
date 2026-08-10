@@ -1,17 +1,21 @@
 import { createError, defineEventHandler } from 'h3'
-import { getSessionFromEvent } from '../../utils/auth'
+import { requireAdmin } from '../../utils/auth'
 import { getChannels, normalizeChannelSlug } from '../../utils/channels'
 import {
+  expandRecurringRules,
+  getChannelRules,
   normalizeScheduleList,
   readSchedules,
   SCHEDULE_TIME_ZONE
 } from '../../utils/schedules'
 
+const PREVIEW_DAYS = 14
+
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  // Was `getSessionFromEvent` + a null check, which any Discord account on earth
+  // satisfies via the site's own chat login — leaking every channel's unpublished
+  // schedule. This is admin data; gate it like every other admin endpoint.
+  requireAdmin(event)
 
   const slug = normalizeChannelSlug(event.context.params?.slug)
   if (!slug) {
@@ -26,10 +30,17 @@ export default defineEventHandler(async (event) => {
 
   const stored = await readSchedules()
   const entries = normalizeScheduleList(stored.channels?.[slug] || [])
+  const rules = getChannelRules(stored, slug)
+
+  const now = Date.now()
+  const occurrences = expandRecurringRules(rules, now, now + PREVIEW_DAYS * 86400000)
 
   return {
     channel: slug,
     timeZone: SCHEDULE_TIME_ZONE,
-    entries
+    entries,
+    rules,
+    occurrences,
+    previewDays: PREVIEW_DAYS
   }
 })

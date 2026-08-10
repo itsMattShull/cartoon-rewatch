@@ -4,13 +4,15 @@ import { getChannels, normalizeChannelSlug } from '../../utils/channels'
 import {
   normalizeScheduleList,
   readSchedules,
+  withScheduleLock,
   writeSchedules
 } from '../../utils/schedules'
+import { isValidId } from '#shared/schedule-time.js'
 import { broadcastToViewers } from '../../utils/viewer-broadcast'
 
 export default defineEventHandler(async (event) => {
   assertSameOrigin(event)
-  const session = requireAdmin(event)
+  requireAdmin(event)
 
   const body = await readBody(event)
   const channelSlug = normalizeChannelSlug(body?.channelSlug)
@@ -28,16 +30,33 @@ export default defineEventHandler(async (event) => {
   if (!entryId) {
     throw createError({ statusCode: 400, statusMessage: 'Missing schedule id' })
   }
-
-  const stored = await readSchedules()
-  const existingEntries = normalizeScheduleList(stored.channels?.[channelSlug] || [])
-  const nextEntries = existingEntries.filter((entry) => entry.id !== entryId)
-  if (nextEntries.length === existingEntries.length) {
-    throw createError({ statusCode: 404, statusMessage: 'Schedule entry not found' })
+  if (!isValidId(entryId)) {
+    // A rule occurrence id lands here. Those are not rows in this store — the caller
+    // wants to skip an occurrence, which is /api/schedule/recurring/delete.
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'That entry comes from a repeating block. Edit the repeat instead.'
+    })
   }
 
-  stored.channels[channelSlug] = nextEntries
-  await writeSchedules(stored)
+  await withScheduleLock(async () => {
+    const stored = await readSchedules()
+    const existingEntries = normalizeScheduleList(stored.channels?.[channelSlug] || [])
+    const nextEntries = existingEntries.filter((entry) => entry.id !== entryId)
+    if (nextEntries.length === existingEntries.length) {
+      throw createError({ statusCode: 404, statusMessage: 'Schedule entry not found' })
+    }
+
+    if (!stored.channels || typeof stored.channels !== 'object') {
+      stored.channels = {}
+    }
+    stored.channels[channelSlug] = nextEntries.map(({ id, blockSlug, startTime }) => ({
+      id,
+      blockSlug,
+      startTime
+    }))
+    await writeSchedules(stored)
+  })
 
   broadcastToViewers({
     type: 'schedule_update',
