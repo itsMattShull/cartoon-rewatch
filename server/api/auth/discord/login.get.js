@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { defineEventHandler, getQuery, sendRedirect, setCookie } from 'h3'
+import { safeRedirectPath } from '../../../utils/auth'
 
 function oauthCookie(maxAge) {
   return {
@@ -21,7 +22,7 @@ export default defineEventHandler((event) => {
   const query = getQuery(event)
 
   const requestedRedirect = typeof query.redirect === 'string' ? query.redirect : ''
-  const safeRedirect = requestedRedirect.startsWith('/') ? requestedRedirect : ''
+  const safeRedirect = safeRedirectPath(requestedRedirect, '')
 
   const requestedScope = typeof query.scope === 'string' ? query.scope : ''
   const safeScope = requestedScope === 'chat' ? 'chat' : ''

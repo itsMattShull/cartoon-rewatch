@@ -1,5 +1,28 @@
 <template>
   <div class="page">
+    <!-- Banner text is always rendered through {{ }} / :alt. Never switch these to
+         v-html to support markup: the content is admin-supplied and shown publicly. -->
+    <div v-if="showAnnouncement" class="announcement" role="status">
+      <p class="announcement-text">{{ announcement.text }}</p>
+      <a
+        v-if="announcementHref"
+        class="announcement-link"
+        :href="announcementHref"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {{ announcement.linkLabel || 'Learn more' }}
+      </a>
+      <button
+        class="announcement-dismiss"
+        type="button"
+        aria-label="Dismiss announcement"
+        @click="dismissAnnouncement"
+      >
+        ✕
+      </button>
+    </div>
+
     <header class="title-bar">
       <div class="brand">
         <span class="brand-mark">Cartoon ReWatch</span>
@@ -40,13 +63,16 @@
           <div class="channel-banner">
             <span class="channel-number">CH {{ displayChannelNumber }}</span>
             <div class="channel-name">
-              <!-- <a
+              <a
+                v-if="showChannelStrip && channelStripHref"
+                class="support-slot strip-link"
+                :href="channelStripHref"
                 target="_blank"
-                href="https://www.patreon.com/join/MattShull?redirect_uri=https%3A%2F%2Fwww.cartoonrewatch.com&utm_medium=widget"
-                data-patreon-widget-type="become-patron-button"
+                rel="noopener noreferrer"
               >
-                Support projects like this
-              </a> -->
+                {{ channelStrip.text }}
+              </a>
+              <span v-else-if="showChannelStrip" class="support-slot">{{ channelStrip.text }}</span>
             </div>
             <span class="channel-status" :class="{ off: !isOn }">
               {{ isOn ? 'LIVE' : 'OFFLINE' }}
@@ -56,7 +82,30 @@
       </section>
 
       <aside class="controls">
-        <a href="https://www.cartoonreorbit.com" target="_blank"><img class="ad-banner" src="/ad1.gif" alt="" loading="lazy" /></a>
+        <!-- On phones .controls sits below the TV, so the ad stack is ordered after
+             the panel to keep the remote controls reachable without scrolling past ads. -->
+        <div v-if="visibleAds.length" class="ad-stack">
+          <component
+            :is="ad.href ? 'a' : 'div'"
+            v-for="(ad, index) in visibleAds"
+            :key="ad.id"
+            class="ad-slot"
+            v-bind="ad.href ? { href: ad.href, target: '_blank', rel: 'noopener noreferrer' } : {}"
+          >
+            <img
+              class="ad-banner"
+              :src="ad.src"
+              :alt="ad.alt"
+              :width="ad.width || null"
+              :height="ad.height || null"
+              :style="ad.width && ad.height ? { aspectRatio: `${ad.width} / ${ad.height}` } : null"
+              :loading="index === 0 ? 'eager' : 'lazy'"
+              decoding="async"
+              fetchpriority="low"
+              referrerpolicy="no-referrer"
+            />
+          </component>
+        </div>
         <div class="panel">
           <div class="panel-header">
             <div class="panel-title">
@@ -219,6 +268,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { safeImageUrl, safeLinkUrl } from '#shared/url-safety.js'
 import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
@@ -403,7 +453,70 @@ const viewerCounts = ref({ total: 0, channels: {} })
 const viewerId = ref(null)
 const activePanel = ref('chat')
 const { data: authData } = await useFetch('/api/auth/me')
+// Banners ride along in this existing SSR fetch, so they cost no extra round trip and
+// are present in the first paint. Do not move them to $fetch in onMounted — that
+// reintroduces a post-hydration request and makes every banner shift the layout.
 const { data: scheduleSettings } = await useFetch('/api/settings')
+
+const banners = computed(() => scheduleSettings.value?.banners ?? null)
+const announcement = computed(
+  () => banners.value?.announcement ?? { enabled: false, text: '', linkUrl: '', linkLabel: '' }
+)
+const channelStrip = computed(
+  () => banners.value?.channelStrip ?? { enabled: false, text: '', linkUrl: '' }
+)
+
+// Dismissal lives in a cookie rather than localStorage so the server renders the same
+// thing the client will: reading it after hydration would render the bar for returning
+// visitors and then yank it away, shifting the whole page upward mid-load.
+// The value is the dismissed text, so editing the announcement re-shows it.
+const announcementDismissed = useCookie('crt80_ann_dismissed', {
+  maxAge: 60 * 60 * 24 * 180,
+  sameSite: 'lax',
+  path: '/'
+})
+
+function announcementKey(text) {
+  // Short, stable, cookie-safe fingerprint of the current announcement text.
+  let hash = 0
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0
+  }
+  return String(hash)
+}
+
+const showAnnouncement = computed(() => {
+  const value = announcement.value
+  if (!value?.enabled || !value.text) return false
+  return announcementDismissed.value !== announcementKey(value.text)
+})
+
+// Re-sanitised at render time. The stored config is validated on write, but that is not
+// the only path into this data (hand edits, restores, schema changes), and Vue does not
+// sanitise bound href/src attributes.
+const announcementHref = computed(() => safeLinkUrl(announcement.value?.linkUrl))
+const channelStripHref = computed(() => safeLinkUrl(channelStrip.value?.linkUrl))
+const showChannelStrip = computed(
+  () => Boolean(channelStrip.value?.enabled && channelStrip.value?.text)
+)
+
+const visibleAds = computed(() =>
+  (banners.value?.ads ?? [])
+    .filter((ad) => ad?.enabled)
+    .map((ad) => ({
+      id: ad.id,
+      src: safeImageUrl(ad.imageUrl),
+      href: safeLinkUrl(ad.linkUrl),
+      alt: ad.alt || '',
+      width: ad.width || 0,
+      height: ad.height || 0
+    }))
+    .filter((ad) => ad.src)
+)
+
+function dismissAnnouncement() {
+  announcementDismissed.value = announcementKey(announcement.value?.text || '')
+}
 const weekStartOffset = computed(() => {
   const day = scheduleSettings.value?.scheduleDay ?? 5
   const hour = scheduleSettings.value?.scheduleHour ?? 19
@@ -512,7 +625,7 @@ useHead({
   meta: [
     { name: 'description', content: pageDescription },
     { name: 'robots', content: 'index,follow' },
-    { name: 'theme-color', content: '#1f2024' },
+    { name: 'theme-color', content: 'var(--cr-surface-4)' },
     { property: 'og:title', content: pageTitle },
     { property: 'og:description', content: pageDescription },
     { property: 'og:type', content: 'website' },
@@ -1536,28 +1649,14 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=VT323&family=Orbitron:wght@400;600&display=swap');
-
-:global(*),
-:global(*::before),
-:global(*::after) {
-  box-sizing: border-box;
-}
-
-:global(html),
-:global(body) {
-  margin: 0;
-  padding: 0;
-  background: #070707;
-}
-
 .page {
+  font-weight: 500;
   min-height: 100vh;
   padding: clamp(14px, 3vw, 24px);
   overflow-x: hidden;
-  background: radial-gradient(circle at top, #2b2e35 0%, #101015 45%, #070707 100%);
-  color: #f7f0d8;
-  font-family: 'Orbitron', sans-serif;
+  background: radial-gradient(circle at top, var(--cr-surface-page-top) 0%, var(--cr-surface-1) 45%, var(--cr-surface-root) 100%);
+  color: var(--cr-text);
+  font-family: var(--cr-font);
   --content-max: 1680px;
   --controls-max: 480px;
 }
@@ -1573,8 +1672,8 @@ onBeforeUnmount(() => {
   margin-inline: auto;
   max-width: var(--content-max);
   padding: 12px 18px;
-  background: linear-gradient(90deg, #1f2024, #2f2b20 60%, #3b2b17);
-  border: 2px solid #a88c5a;
+  background: linear-gradient(90deg, var(--cr-surface-4), var(--cr-surface-titlebar-mid) 60%, var(--cr-surface-titlebar-end));
+  border: 2px solid var(--cr-line-3);
   border-radius: 12px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
   margin-bottom: 24px;
@@ -1587,35 +1686,36 @@ onBeforeUnmount(() => {
 }
 
 .brand-mark {
-  font-size: 24px;
-  letter-spacing: 4px;
-  color: #f9d98f;
-  text-shadow: 0 0 12px rgba(249, 217, 143, 0.4);
+  font-size: 27px;
+  letter-spacing: 0.09em;
+  color: var(--cr-accent);
+  text-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
 }
 
 .brand-sub {
-  font-size: 12px;
-  letter-spacing: 2px;
-  color: #cbb78f;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--cr-text-muted-4);
 }
 
 .clock {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  font-family: 'VT323', monospace;
+  font-family: var(--cr-font);
 }
 
 .clock-label {
   font-size: 12px;
-  color: #d7c7a4;
+  color: var(--cr-text-muted-2);
   text-transform: uppercase;
   letter-spacing: 2px;
 }
 
 .clock-time {
-  font-size: 28px;
-  color: #fdf0c2;
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  color: var(--cr-text-bright);
 }
 
 
@@ -1643,18 +1743,18 @@ onBeforeUnmount(() => {
   max-width: 100%;
   flex: 0 0 auto;
   min-height: 0;
-  background: linear-gradient(135deg, #4b2f1b, #7a5630 40%, #3a2412 100%);
+  background: linear-gradient(135deg, var(--cr-bezel-0), var(--cr-bezel-40) 40%, var(--cr-bezel-100) 100%);
   border-radius: clamp(18px, 4vw, 32px);
   padding: clamp(14px, 3vw, 22px);
   box-shadow: 0 18px 30px rgba(0, 0, 0, 0.55);
-  border: 3px solid #b58a56;
+  border: 3px solid var(--cr-bezel-rim);
 }
 
 .screen {
-  background: #1b1c1d;
+  background: var(--cr-surface-screen);
   border-radius: clamp(12px, 3vw, 18px);
   padding: clamp(10px, 2.6vw, 18px);
-  border: 2px solid #4f422c;
+  border: 2px solid var(--cr-line-subtle);
   min-height: 0;
 }
 
@@ -1664,7 +1764,7 @@ onBeforeUnmount(() => {
   aspect-ratio: 16 / 9;
   border-radius: 12px;
   overflow: hidden;
-  background: radial-gradient(circle at center, #243f2e 0%, #0b0c0d 70%);
+  background: radial-gradient(circle at center, var(--cr-surface-glow) 0%, var(--cr-surface-screen-in) 70%);
   min-height: 0;
 }
 
@@ -1722,10 +1822,10 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   font-size: 28px;
-  letter-spacing: 4px;
-  color: #d1b985;
-  text-shadow: 0 0 12px rgba(255, 213, 140, 0.4);
-  background: radial-gradient(circle at center, #1c1b19 0%, #050505 80%);
+  letter-spacing: 0.1em;
+  color: var(--cr-text-muted-3);
+  text-shadow: 0 0 12px rgba(164, 227, 255, 0.4);
+  background: radial-gradient(circle at center, var(--cr-surface-screen-off) 0%, var(--cr-surface-void) 80%);
 }
 
 .audio-overlay {
@@ -1734,11 +1834,11 @@ onBeforeUnmount(() => {
   right: 18px;
   padding: 10px 16px;
   border-radius: 999px;
-  border: 1px solid #f7e4b4;
-  background: rgba(24, 20, 14, 0.85);
-  color: #f7e4b4;
-  font-family: 'VT323', monospace;
-  font-size: 18px;
+  border: 1px solid var(--cr-text-ctrl);
+  background: rgba(16, 26, 37, 0.85);
+  color: var(--cr-text-ctrl);
+  font-family: var(--cr-font);
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -1749,10 +1849,12 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 6px 12px;
   padding: 14px 8px 0;
-  font-family: 'VT323', monospace;
-  color: #f9d98f;
+  font-family: var(--cr-font);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cr-accent);
   text-transform: uppercase;
-  letter-spacing: 2px;
+  letter-spacing: 0.08em;
 }
 
 @media (min-width: 1201px) {
@@ -1828,6 +1930,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .channel-name-text {
@@ -1838,6 +1942,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   text-transform: none;
   letter-spacing: normal;
+  font-size: 13px;
 }
 
 .channel-name a[data-patreon-widget-type] {
@@ -1846,9 +1951,9 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(249, 217, 143, 0.8);
-  background: linear-gradient(180deg, rgba(49, 36, 22, 0.95), rgba(28, 21, 13, 0.95));
-  color: #f9d98f;
+  border: 1px solid rgba(159, 224, 255, 0.8);
+  background: linear-gradient(180deg, rgba(16, 42, 62, 0.95), rgba(14, 29, 42, 0.95));
+  color: var(--cr-accent);
   font-size: 13px;
   text-transform: none;
   letter-spacing: 0.5px;
@@ -1858,19 +1963,19 @@ onBeforeUnmount(() => {
 }
 
 .channel-name a[data-patreon-widget-type]:hover {
-  border-color: rgba(249, 217, 143, 1);
+  border-color: rgba(159, 224, 255, 1);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
   transform: translateY(-1px);
 }
 
 .channel-name a[data-patreon-widget-type]:focus-visible {
-  outline: 2px solid rgba(249, 217, 143, 0.9);
+  outline: 2px solid rgba(159, 224, 255, 0.9);
   outline-offset: 2px;
 }
 
 .channel-status {
   padding: 4px 10px;
-  border: 1px solid #f9d98f;
+  border: 1px solid var(--cr-accent);
   border-radius: 999px;
 }
 
@@ -1888,20 +1993,78 @@ onBeforeUnmount(() => {
   justify-self: end;
 }
 
+.ad-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ad-slot {
+  display: block;
+  min-width: 0;
+}
+
 .ad-banner {
   width: 100%;
   height: auto;
   display: block;
   border-radius: 10px;
+  /* Reserves the box before the bytes arrive. The inline aspect-ratio from the stored
+     intrinsic size wins where we know it; this is the fallback for older records. */
+  background: var(--cr-surface-3);
+}
+
+.announcement {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: var(--content-max);
+  margin: 0 auto 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--cr-line-2);
+  border-radius: 12px;
+  background: linear-gradient(90deg, var(--cr-surface-4), var(--cr-surface-titlebar-end));
+  color: var(--cr-text);
+  font-size: 14px;
+}
+
+.announcement-text {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.announcement-link {
+  color: var(--cr-accent);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.announcement-dismiss {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--cr-line-2);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--cr-text-muted-5);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.strip-link {
+  color: var(--cr-accent);
 }
 
 .panel {
   flex: 1;
   max-width: 100%;
-  background: linear-gradient(180deg, #1a1b20, #2a2419 80%);
+  background: linear-gradient(180deg, var(--cr-surface-3), var(--cr-surface-panel-bot) 80%);
   border-radius: 20px;
   padding: 18px;
-  border: 2px solid #7c6845;
+  border: 2px solid var(--cr-line-2);
   box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
 }
 
@@ -1910,7 +2073,7 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 2px;
   margin-bottom: 12px;
-  color: #f9d98f;
+  color: var(--cr-accent);
 }
 
 .panel-title {
@@ -1922,7 +2085,7 @@ onBeforeUnmount(() => {
 
 .viewer-inline {
   font-size: 10px;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
   letter-spacing: 1px;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1939,7 +2102,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 2px;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
 }
 
 .now-name {
@@ -1948,10 +2111,11 @@ onBeforeUnmount(() => {
 }
 
 .now-time {
-  font-family: 'VT323', monospace;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--cr-font);
   font-size: 16px;
   margin-top: 4px;
-  color: #f3e0b8;
+  color: var(--cr-text-lcd);
 }
 
 
@@ -1964,11 +2128,11 @@ onBeforeUnmount(() => {
 
 .tab-button {
   border-radius: 10px;
-  border: 1px solid rgba(124, 104, 69, 0.6);
+  border: 1px solid rgba(37, 112, 158, 0.6);
   background: rgba(0, 0, 0, 0.2);
-  color: #f7e4b4;
+  color: var(--cr-text-ctrl);
   padding: 8px 10px;
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--cr-font);
   text-transform: uppercase;
   letter-spacing: 1px;
   font-size: 12px;
@@ -1976,15 +2140,15 @@ onBeforeUnmount(() => {
 }
 
 .tab-button.active {
-  border-color: #f9d98f;
-  color: #f9d98f;
-  background: rgba(249, 217, 143, 0.12);
+  border-color: var(--cr-accent);
+  color: var(--cr-accent);
+  background: rgba(159, 224, 255, 0.12);
 }
 
 .panel-section {
   display: grid;
   gap: 12px;
-  border: 1px dashed rgba(124, 104, 69, 0.6);
+  border: 1px dashed rgba(37, 112, 158, 0.6);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.2);
   padding: 12px;
@@ -2013,19 +2177,19 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
   column-gap: 10px;
   align-items: start;
-  font-family: 'VT323', monospace;
-  color: #f7f0d8;
+  font-family: var(--cr-font);
+  color: var(--cr-text);
 }
 
 .chat-message.system {
   font-style: italic;
-  color: #bfa981;
+  color: var(--cr-text-dim-1);
   grid-template-columns: minmax(0, 1fr);
 }
 
 .chat-user {
   font-size: 14px;
-  color: #f9d98f;
+  color: var(--cr-accent);
   white-space: nowrap;
 }
 
@@ -2052,19 +2216,19 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(124, 104, 69, 0.6);
+  border: 1px solid rgba(37, 112, 158, 0.6);
   background: rgba(0, 0, 0, 0.2);
   font-size: 12px;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
 }
 
 .chat-auth a {
   text-decoration: none;
   padding: 6px 10px;
   border-radius: 8px;
-  border: 1px solid #a88c5a;
-  color: #f7f0d8;
-  font-family: 'Orbitron', sans-serif;
+  border: 1px solid var(--cr-line-3);
+  color: var(--cr-text);
+  font-family: var(--cr-font);
   font-size: 12px;
 }
 
@@ -2076,21 +2240,21 @@ onBeforeUnmount(() => {
 
 .chat-input input {
   border-radius: 10px;
-  border: 1px solid rgba(124, 104, 69, 0.6);
+  border: 1px solid rgba(37, 112, 158, 0.6);
   background: rgba(0, 0, 0, 0.3);
-  color: #f7f0d8;
+  color: var(--cr-text);
   padding: 8px 10px;
-  font-family: 'VT323', monospace;
+  font-family: var(--cr-font);
   font-size: 16px;
 }
 
 .chat-input button {
   border-radius: 10px;
-  border: 1px solid rgba(124, 104, 69, 0.6);
-  background: rgba(249, 217, 143, 0.12);
-  color: #f9d98f;
+  border: 1px solid rgba(37, 112, 158, 0.6);
+  background: rgba(159, 224, 255, 0.12);
+  color: var(--cr-accent);
   padding: 8px 14px;
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--cr-font);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -2113,7 +2277,7 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
   padding: 12px;
   border-radius: 12px;
-  border: 1px solid rgba(181, 138, 86, 0.45);
+  border: 1px solid rgba(53, 154, 204, 0.45);
   background: rgba(0, 0, 0, 0.3);
 }
 
@@ -2124,14 +2288,15 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 2px;
   font-size: 11px;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
   margin-bottom: 10px;
 }
 
 .volume-value {
-  font-family: 'VT323', monospace;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--cr-font);
   font-size: 18px;
-  color: #f3e0b8;
+  color: var(--cr-text-lcd);
   text-transform: none;
   letter-spacing: 1px;
 }
@@ -2141,7 +2306,7 @@ onBeforeUnmount(() => {
   appearance: none;
   height: 6px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #7a5630, #f9d98f 55%, #f9b65a);
+  background: linear-gradient(90deg, var(--cr-slider-track-0), var(--cr-accent) 55%, var(--cr-slider-track-1));
   box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
   cursor: pointer;
 }
@@ -2156,8 +2321,8 @@ onBeforeUnmount(() => {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #f7e4b4;
-  border: 2px solid #3a2c1c;
+  background: var(--cr-text-ctrl);
+  border: 2px solid var(--cr-surface-btn-top);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
@@ -2165,8 +2330,8 @@ onBeforeUnmount(() => {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #f7e4b4;
-  border: 2px solid #3a2c1c;
+  background: var(--cr-text-ctrl);
+  border: 2px solid var(--cr-surface-btn-top);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
@@ -2175,30 +2340,30 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   margin-top: 6px;
   font-size: 10px;
-  color: #bfa77e;
+  color: var(--cr-text-dim-2);
   letter-spacing: 1px;
 }
 
 .dial,
 .toggle,
 .channel-button {
-  font-family: 'Orbitron', sans-serif;
+  font-family: var(--cr-font);
   font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 1px;
   padding: 10px 12px;
   border-radius: 12px;
-  border: 1px solid #b58a56;
-  background: linear-gradient(180deg, #3a2c1c, #2a1f13);
-  color: #f7e4b4;
+  border: 1px solid var(--cr-line-strong);
+  background: linear-gradient(180deg, var(--cr-surface-btn-top), var(--cr-surface-btn-bot));
+  color: var(--cr-text-ctrl);
   cursor: pointer;
   box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.6);
 }
 
 .toggle.active,
 .channel-button.active {
-  border-color: #f9d98f;
-  box-shadow: 0 0 12px rgba(249, 217, 143, 0.4);
+  border-color: var(--cr-accent);
+  box-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
 }
 
 .guide {
@@ -2218,7 +2383,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 2px;
-  color: #cbb78f;
+  color: var(--cr-text-muted-4);
   display: flex;
   align-items: center;
 }
@@ -2228,7 +2393,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   background: rgba(0, 0, 0, 0.35);
   border-radius: 8px;
-  border: 1px solid rgba(181, 138, 86, 0.4);
+  border: 1px solid rgba(53, 154, 204, 0.4);
   display: flex;
   align-items: center;
 }
@@ -2240,17 +2405,18 @@ onBeforeUnmount(() => {
 
 .guide-header {
   display: flex;
-  font-family: 'VT323', monospace;
+  font-family: var(--cr-font);
   text-transform: uppercase;
   align-items: center;
   height: 44px;
 }
 
 .guide-hour {
+  font-variant-numeric: tabular-nums;
   padding: 6px 8px;
-  border: 1px solid rgba(181, 138, 86, 0.35);
+  border: 1px solid rgba(53, 154, 204, 0.35);
   border-right: none;
-  color: #f9d98f;
+  color: var(--cr-accent);
   background: rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
   white-space: nowrap;
@@ -2259,7 +2425,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-hour:last-child {
-  border-right: 1px solid rgba(181, 138, 86, 0.35);
+  border-right: 1px solid rgba(53, 154, 204, 0.35);
 }
 
 .guide-row {
@@ -2271,8 +2437,8 @@ onBeforeUnmount(() => {
 
 .guide-block {
   height: 100%;
-  background: linear-gradient(135deg, rgba(51, 38, 24, 0.95), rgba(25, 19, 12, 0.95));
-  border: 1px solid rgba(181, 138, 86, 0.5);
+  background: linear-gradient(135deg, rgba(16, 44, 66, 0.95), rgba(14, 27, 39, 0.95));
+  border: 1px solid rgba(53, 154, 204, 0.5);
   border-right: none;
   padding: 8px 10px;
   display: flex;
@@ -2282,7 +2448,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-block:last-child {
-  border-right: 1px solid rgba(181, 138, 86, 0.5);
+  border-right: 1px solid rgba(53, 154, 204, 0.5);
 }
 
 .guide-title {
@@ -2295,17 +2461,31 @@ onBeforeUnmount(() => {
 .note {
   margin-top: 16px;
   font-size: 12px;
-  color: #cab688;
+  color: var(--cr-text-muted-5);
 }
 
 .code {
-  font-family: 'VT323', monospace;
+  font-family: var(--cr-font-mono);
   font-size: 14px;
 }
 
 @media (max-width: 1200px) {
   .page {
     padding: 16px;
+  }
+
+  .panel {
+    order: 1;
+  }
+
+  .ad-stack {
+    order: 2;
+  }
+
+  /* Cap the stack on phones: an unbounded column of banners otherwise pushes
+     the controls far below the fold. */
+  .ad-stack > .ad-slot:nth-child(n + 3) {
+    display: none;
   }
 
   .tv-layout {
@@ -2328,6 +2508,23 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 600px) {
+  .channel-name {
+    flex-basis: 100%;
+    order: 3;
+    justify-content: center;
+  }
+
+  .announcement {
+    font-size: 13px;
+  }
+
+  .announcement-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   .title-bar {
     flex-direction: column;
     align-items: flex-start;

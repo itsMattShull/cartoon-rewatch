@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createError, defineEventHandler, readBody } from 'h3'
-import { getSessionFromEvent } from '../../utils/auth'
+import { assertSameOrigin, requireAdmin } from '../../utils/auth'
 
 const BLOCKS_DIR = 'assets/blocks'
 const INDEX_FILE = 'assets/blocks/blocks-index.json'
@@ -62,10 +62,8 @@ function isNumericId(value) {
 }
 
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  assertSameOrigin(event)
+  const session = requireAdmin(event)
 
   const body = await readBody(event)
   const nameInput = typeof body?.name === 'string' ? body.name : null

@@ -13,6 +13,7 @@ The app plays channel blocks (YouTube and Dailymotion), supports live channel sw
 - Live viewer counts and channel chat via WebSockets (`/api/viewers`)
 - Discord OAuth for authentication
 - Admin analytics dashboard (unique viewers, returning %, visits, channel breakdown)
+- Editable site banners (announcement bar, sidebar ad banners, channel strip text)
 
 ## Tech Stack
 
@@ -81,7 +82,36 @@ This project stores most runtime content as JSON:
 - `assets/blocks/blocks-index.json` - block metadata (created/updated/by)
 - `assets/channels/channels-index.json` - channel list and names
 - `assets/schedules/schedules.json` - scheduled block switches
+- `assets/settings/settings.json` - weekly schedule start day/hour
 - `assets/discord-users.json` - Discord ID to username cache
+
+Runtime-only state lives under `.data/` (gitignored, preserved across deploys):
+
+- `.data/banners.json` - banner configuration
+- `.data/banners/` - uploaded banner images, named by content hash
+- `.data/analytics.json` - analytics store
+
+> Note: `assets/settings/settings.json` and `assets/discord-users.json` are tracked in
+> git *and* written at runtime. If a future commit edits either file, the deploy's
+> `git pull` will abort with "local changes would be overwritten" — after `pm2 stop`
+> has already run. Moving them into `.data/` would remove that risk.
+
+## Banners
+
+Banners are edited at `/admin/settings` and stored in `.data/banners.json`:
+
+- **Announcement banner** - dismissible bar at the top of the front page. Dismissal is
+  keyed to the message text, so editing the text re-shows it to everyone.
+- **Sidebar banners** - up to 6 image banners with click-through links. On screens under
+  1200px they render below the control panel, and only the first two are shown.
+- **Channel strip text** - the middle slot of the CH / LIVE strip under the TV.
+
+Images can be an external `https` URL or uploaded. Uploads accept PNG, JPEG, GIF and
+WebP up to 2 MB, identified by magic bytes rather than by filename or content type
+(SVG is rejected — it can carry scripts). Files are stored under a content-hash name and
+served from `/api/banner-image/<hash>.<ext>` with immutable caching. Set
+`client_max_body_size 2m;` on the upload path in nginx so oversized bodies are rejected
+before Node buffers them.
 
 Default channel payloads currently exist in:
 
@@ -99,7 +129,13 @@ Default channel payloads currently exist in:
   - `/admin/block-maker`
   - `/admin/schedule`
   - `/admin/analytics`
-- Chat login uses Discord with `scope=chat` and is separate from admin allow-list checks.
+  - `/admin/settings`
+- Chat login uses Discord with `scope=chat`. It issues the same session cookie, so the
+  cookie alone does **not** imply admin rights: the signed payload carries a `scope`
+  claim, and every admin write endpoint goes through `requireAdmin()`, which requires
+  `scope === 'admin'` *and* membership of `DISCORD_ALLOWED_IDS`.
+- Admin write endpoints also call `assertSameOrigin()`, which requires a same-origin
+  `Origin` header. Calling them from curl needs `-H "Origin: https://<your-host>"`.
 
 ## Deployment
 
