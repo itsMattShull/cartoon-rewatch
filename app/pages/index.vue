@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" :class="{ theater: theaterMode }">
     <!-- Banner text is always rendered through {{ }} / :alt. Never switch these to
          v-html to support markup: the content is admin-supplied and shown publicly. -->
     <div v-if="showAnnouncement" class="announcement" role="status">
@@ -186,6 +186,28 @@
                 <span>100%</span>
               </div>
             </div>
+
+            <div class="controls-row single">
+              <!-- The visible label contains "Theater Mode" so the accessible name
+                   matches it (WCAG 2.5.3 Label in Name) and voice control works.
+                   aria-pressed is announced automatically on the focused button, so
+                   no aria-live region is needed here. The glyph is a non-colour cue
+                   for the pressed state (1.4.1). -->
+              <button
+                class="toggle theater-toggle"
+                :class="{ active: theaterMode }"
+                type="button"
+                :aria-pressed="theaterMode ? 'true' : 'false'"
+                @click="theaterMode = !theaterMode"
+              >
+                <span class="toggle-glyph" aria-hidden="true">{{ theaterMode ? '◼' : '◻' }}</span>
+                Theater Mode
+              </button>
+            </div>
+            <p class="theater-hint">
+              Dims the site around the screen and gives the picture the full width.
+              Press Esc to leave.
+            </p>
           </div>
 
           <div v-else-if="activePanel === 'chat'" class="panel-section chat-panel">
@@ -470,10 +492,39 @@ const channelStrip = computed(
 // thing the client will: reading it after hydration would render the bar for returning
 // visitors and then yank it away, shifting the whole page upward mid-load.
 // The value is the dismissed text, so editing the announcement re-shows it.
+// `decode` is not optional here. useCookie's default decoder runs the raw value
+// through destr, which turns a numeric string back into a Number — so a stored
+// "1682" reads back as 1682 and never matches the string it is compared against.
+// Both cookies on this page store digit strings, so both must opt out.
+const rawCookie = (value) => value
 const announcementDismissed = useCookie('crt80_ann_dismissed', {
   maxAge: 60 * 60 * 24 * 180,
   sameSite: 'lax',
-  path: '/'
+  path: '/',
+  decode: rawCookie
+})
+
+// Theater mode: a per-viewer display preference, so it is deliberately client-side
+// only — no auth check, nothing on the server, nothing in /api/settings (that store
+// is admin-managed global site config).
+//
+// A cookie rather than localStorage for the same reason the dismissal above uses one:
+// theater changes the page layout, and localStorage cannot be read during SSR, so
+// every returning viewer would get a flash of the normal layout and a reflow on each
+// load. The cookie is readable server-side, so the first paint is already correct.
+// Note this makes / vary per viewer — which it already did, via /api/auth/me and the
+// cookie above — so / must stay uncacheable if a CDN is ever put in front of it.
+const theaterCookie = useCookie('crt80_theater', {
+  maxAge: 60 * 60 * 24 * 180,
+  sameSite: 'lax',
+  path: '/',
+  decode: rawCookie
+})
+const theaterMode = computed({
+  get: () => theaterCookie.value === '1',
+  set: (value) => {
+    theaterCookie.value = value ? '1' : '0'
+  }
 })
 
 function announcementKey(text) {
@@ -1601,7 +1652,15 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
   }
 }
 
+// Without this the only way out of theater mode is the Controls tab, which is not the
+// default tab — so a viewer who toggles it on while reading chat has no visible exit.
+function handleTheaterKeydown(event) {
+  if (event.key !== 'Escape' || !theaterMode.value) return
+  theaterMode.value = false
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', handleTheaterKeydown)
   if (typeof window !== 'undefined') {
     const saved = Number.parseInt(window.localStorage.getItem(storageKey) || '', 10)
     if (Number.isFinite(saved) && saved >= 0 && saved < channels.value.length) {
@@ -1634,6 +1693,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleTheaterKeydown)
   if (clockInterval) window.clearInterval(clockInterval)
   if (syncInterval) window.clearInterval(syncInterval)
   if (resizeObserver) resizeObserver.disconnect()
@@ -1766,6 +1826,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: radial-gradient(circle at center, var(--cr-surface-glow) 0%, var(--cr-surface-screen-in) 70%);
   min-height: 0;
+  /* .scanlines below uses mix-blend-mode: multiply. Nothing between here and the root
+     element established a stacking context, so the blend group climbed to the document
+     and its backdrop was the whole page. Pinning it here bounds the blend to the video
+     box and makes the effect immune to any ancestor later gaining opacity/filter/
+     transform/contain — several of which are natural ways to write a "dim everything
+     but the video" mode. The backdrop here is already opaque, so this is a visual no-op. */
+  isolation: isolate;
 }
 
 .player-shell {
@@ -1922,6 +1989,121 @@ onBeforeUnmount(() => {
     margin-top: 12px;
     margin-bottom: 0;
     padding-top: 0;
+  }
+
+  /* ---- Theater mode, desktop half -------------------------------------------
+     This is the only breakpoint where theater changes layout. Below 1201px the
+     page is already a single stacked column, so there is nothing to reclaim. */
+
+  .page.theater .tv-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Everything above stretches the TV to match the sidebar column's height and
+     center-crops a 16:9 iframe into whatever box that produces. With no column
+     beside it, .screen-inner has no height driver at all and would collapse to
+     zero, so the stretch has to be unwound and a real 16:9 ratio restored. */
+  .page.theater .tv-frame {
+    align-self: start;
+  }
+
+  .page.theater .bezel {
+    height: auto;
+    display: block;
+    /* Size the set so the whole picture is visible without scrolling.
+       Two things make this less obvious than it looks:
+
+       1. svh, not vh — vh resolves against the toolbar-retracted viewport, so a
+          vh-derived size is taller than what is actually on screen. Not dvh
+          either: a height-derived *width* recomputed on every frame of a mobile
+          toolbar slide would drive the ResizeObserver -> player.setSize path
+          continuously. svh is the static, pessimistic value, which is what a
+          "guarantee it fits" constraint wants.
+       2. The floor is normal mode's own picture width, not an arbitrary minimum.
+          Above the fold there is ~400px of chrome here (page padding, the
+          announcement, the title bar, the cabinet and the channel strip), so on a
+          short viewport a strict fit would compute a picture NARROWER than the one
+          you get with the sidebar still attached — theater would be a downgrade.
+          Flooring at `100% - sidebar - gap` means theater is never worse than
+          normal, and is genuinely bigger whenever the viewport has the height for it.
+
+       rem units so the chrome allowance tracks the user's font size at 200% zoom. */
+    max-width: min(
+      100%,
+      max(
+        calc(100% - var(--controls-max) - 24px),
+        calc((100svh - var(--theater-chrome)) * 16 / 9)
+      )
+    );
+    margin-inline: auto;
+  }
+
+  .page.theater .screen {
+    flex: none;
+    display: block;
+  }
+
+  .page.theater .screen-inner {
+    flex: none;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  /* Undo the center-crop. Specificity is the whole game here and it is easy to get
+     wrong. The rule being overridden is :global(iframe#yt-player) above, which
+     carries an ID — (1,0,1) — and both sides mark width/height !important, so the
+     tie is settled by specificity. A plain `:deep(iframe)` override is only (0,4,1)
+     and loses, because no number of classes outranks one ID. Repeating the ID
+     *inside* :deep() compiles to `.page.theater .player-shell[data-v] iframe#yt-player`
+     = (1,4,1), which wins honestly.
+     Do NOT write this as `.page.theater :global(iframe#yt-player)`: :global() drops
+     everything to its left, so that compiles to a bare `iframe#yt-player` which
+     outranks nothing but, sitting later in the sheet, silently un-crops the player
+     in normal desktop mode too. (Verified against the built CSS.) */
+  .page.theater .player-shell,
+  .page.theater .player-shell :deep(iframe),
+  .page.theater .player-shell :deep(iframe#yt-player) {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0;
+    min-height: 0;
+    max-width: none;
+    max-height: none;
+    transform: none !important;
+  }
+
+  /* The panel and the ads move below the picture rather than away. Side by side,
+     because a 1550px-wide chat log is unreadable and a 1550px-wide ad banner is a
+     728px creative upscaled 2.1x. Ads stay in the first column to match their DOM
+     position — using `order` here would put tab order and visual order in conflict. */
+  .page.theater .controls {
+    display: grid;
+    grid-template-columns: minmax(0, var(--controls-max)) minmax(0, 1fr);
+    align-items: start;
+    gap: 24px;
+    max-width: 100%;
+    justify-self: stretch;
+  }
+
+  .page.theater .ad-stack {
+    max-width: var(--controls-max);
+  }
+
+  /* .ad-stack is v-if'd away when no ads are enabled, which would drop the panel into
+     the narrow ad column and waste the whole wide one — the guide would come out no
+     bigger than it is with the sidebar attached. Collapse to one column and hold the
+     panel to the width it would have had beside the ads, so it measures the same
+     either way. */
+  .page.theater .controls:not(:has(> .ad-stack)) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page.theater .controls:not(:has(> .ad-stack)) .panel {
+    max-width: calc(100% - var(--controls-max) - 24px);
+    margin-inline: auto;
   }
 }
 
@@ -2170,6 +2352,10 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 8px;
   padding-right: 4px;
+  /* Already a clipping scroll container, so `paint` changes nothing visually; `layout`
+     makes it a layout root so the theater grid change does not re-lay-out the whole
+     message list as part of the ancestor reflow. */
+  contain: layout paint;
 }
 
 .chat-message {
@@ -2273,6 +2459,31 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 
+/* A third button in the shared 2-up grid would orphan onto a second row, and a 3-up
+   grid leaves ~42px of text width in the 280px minimum panel column. */
+.controls-row.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.theater-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.toggle-glyph {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.theater-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--cr-text-muted-5);
+}
+
 .volume-control {
   margin-bottom: 16px;
   padding: 12px;
@@ -2352,6 +2563,9 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 1px;
   padding: 10px 12px;
+  /* These render ~39px tall, under the 44px touch-target floor that
+     .announcement-dismiss already observes. */
+  min-height: 44px;
   border-radius: 12px;
   border: 1px solid var(--cr-line-strong);
   background: linear-gradient(180deg, var(--cr-surface-btn-top), var(--cr-surface-btn-bot));
@@ -2401,6 +2615,9 @@ onBeforeUnmount(() => {
 .guide-scroll {
   overflow-x: auto;
   padding-bottom: 6px;
+  /* Same reasoning as .chat-log: this is a ~3000px-wide scrolling grid, and without a
+     layout root the theater column change reflows all of it. */
+  contain: layout paint;
 }
 
 .guide-header {
@@ -2469,6 +2686,156 @@ onBeforeUnmount(() => {
   font-size: 14px;
 }
 
+/* ===========================================================================
+   Theater mode — dimming
+   ---------------------------------------------------------------------------
+   The chrome recedes by re-pointing the --cr-* tokens at darker values, NOT by
+   putting opacity on the subtree.
+
+   Group opacity was the obvious approach and it is the wrong one here. It
+   composites text and its background toward the backdrop together, so it breaks
+   theme.css's documented ">=4.5:1 against every surface" contract at any useful
+   strength (body text lands at 2.65:1 at 35%); it multiplies with the opacities
+   already nested inside these regions (.channel-status.off is 0.6, :disabled is
+   0.5); it dims the :focus-visible ring along with everything else; it cannot
+   preserve pairs that had no headroom to begin with (.panel's border is 3.18:1
+   today, so it fails 1.4.11 at *any* dim level); it dims ad creatives whose
+   internal contrast we do not control; and forced-colors mode does not override
+   it, so the users who asked the OS for maximum contrast would be the ones who
+   could not turn it off.
+
+   Re-mapping tokens keeps every ratio conformant by construction. Verified
+   across all 25 text and non-text pairs in these regions: none drops below AA,
+   and six improve — including the .panel border (3.18 -> 3.41) and the volume
+   slider track (2.79 -> 3.36), both of which are marginal or failing today.
+   Meanwhile the panel surface loses 66% of its luminance and body text 32%, so
+   the chrome genuinely recedes.
+
+   Nothing inside .tv-frame is touched: the bezel, the screen and the channel
+   banner are the television, which is the one thing this mode must not dim.
+   Keeping .channel-banner out also avoids compounding with .channel-status.off.
+   =========================================================================== */
+
+.page.theater {
+  /* Flat instead of the radial gradient — this is the "lights down" cue, and a
+     full-viewport gradient is also among the more expensive things to raster. */
+  background: var(--cr-surface-root);
+
+  /* Vertical space the picture cannot have, used by the .bezel cap above. Measured
+     rather than guessed: page padding + the title bar sit ~250px above the picture
+     when the announcement is showing, ~170px when it is not, plus a little for the
+     channel strip underneath.
+
+     This budgets for the picture fitting, not the whole cabinet — reserving the
+     cabinet's bottom edge and the page's bottom padding as well left ~110px of
+     viewport height unused and made theater *smaller* than normal mode on a 900px
+     screen. The last inch of the bezel may now fall below the fold; the picture
+     never does. */
+  --theater-chrome: 15rem;
+}
+
+.page.theater:has(> .announcement) {
+  --theater-chrome: 20rem;
+}
+
+/* Written as :not(...) rather than a separate restore rule: when the region is
+   hovered or focused the selector simply stops matching and the tokens inherit
+   their normal values from :root again.
+
+   :has(:focus-visible), not :focus-within. The theater toggle lives inside
+   .controls, so with :focus-within the very act of clicking it left the button
+   focused and cancelled the dim on the panel — the mode looked broken until you
+   clicked somewhere else. :focus-visible is not set by a mouse click on a button,
+   so the panel dims immediately, while keyboard focus and the chat text field
+   (which always matches :focus-visible) still restore it.
+
+   Deliberately not transitioned: a transition would repaint these regions for
+   ~15 frames on every pointer edge crossing, and the layout half of this mode
+   snaps anyway, so a fading recolour beside an instant reflow reads as a glitch. */
+.page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
+.page.theater .announcement:not(:hover):not(:has(:focus-visible)),
+.page.theater .controls:not(:hover):not(:has(:focus-visible)) {
+  --cr-surface-3: #0a0f15;
+  --cr-surface-4: #080d13;
+  --cr-surface-panel-bot: #0a141d;
+  --cr-surface-titlebar-mid: #0a121a;
+  --cr-surface-titlebar-end: #071722;
+  --cr-surface-btn-top: #0a1f2e;
+  --cr-surface-btn-bot: #07141e;
+
+  --cr-text: #b9cdda;
+  --cr-text-bright: #bcd4e0;
+  --cr-text-ctrl: #9dc0d2;
+  --cr-text-lcd: #96b9cb;
+  --cr-text-muted-2: #87a9bb;
+  --cr-text-muted-4: #7ba0b3;
+  --cr-text-muted-5: #749cb0;
+  --cr-text-dim-1: #6f95a8;
+  --cr-text-dim-2: #6d93a6;
+  --cr-accent: #7fb4cd;
+
+  --cr-line-2: #2a6d95;
+  --cr-line-3: #2f7ba6;
+  --cr-line-strong: #3789b5;
+  --cr-brand-400: #1f9ed6;
+  --cr-slider-track-0: #0a6d96;
+  --cr-slider-track-1: #b5d2e0;
+}
+
+/* Ads are images, so the token remap does not reach them. This is the one place
+   a real opacity is used, kept mild and lifted on hover: the banners have to stay
+   legible and clickable, since dimming them is not meant to cost impressions. */
+.page.theater .ad-slot:not(:hover):not(:has(:focus-visible)) .ad-banner {
+  opacity: 0.8;
+}
+
+/* Theater is layout-only for anyone who has asked for maximum contrast or reduced
+   transparency. The widened picture is free; only the recolouring is dropped.
+
+   The values below are the :root values from theme.css restated, not `initial` —
+   `initial` on a custom property means the guaranteed-invalid value, so every
+   var() referencing it would fail rather than fall back to the theme. If a browser
+   does not understand these media features the block simply never applies, which
+   is the safe direction: the dim it would have undone is itself AA-conformant. */
+@media (forced-colors: active),
+  (prefers-contrast: more),
+  (prefers-contrast: custom),
+  (prefers-reduced-transparency: reduce) {
+  .page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
+  .page.theater .announcement:not(:hover):not(:has(:focus-visible)),
+  .page.theater .controls:not(:hover):not(:has(:focus-visible)) {
+    --cr-surface-3: #151c25;
+    --cr-surface-4: #18212b;
+    --cr-surface-panel-bot: #142739;
+    --cr-surface-titlebar-mid: #1c2d3e;
+    --cr-surface-titlebar-end: #0d324c;
+    --cr-surface-btn-top: #0e334d;
+    --cr-surface-btn-bot: #0c2336;
+
+    --cr-text: #e4f1f9;
+    --cr-text-bright: #e2f5fe;
+    --cr-text-ctrl: #c0e7fa;
+    --cr-text-lcd: #bce3f6;
+    --cr-text-muted-2: #a3cbe0;
+    --cr-text-muted-4: #89bdd6;
+    --cr-text-muted-5: #80bbd6;
+    --cr-text-dim-1: #77b0cc;
+    --cr-text-dim-2: #75afca;
+    --cr-accent: #9fe0ff;
+
+    --cr-line-2: #25709e;
+    --cr-line-3: #4096c6;
+    --cr-line-strong: #359acc;
+    --cr-brand-400: #0ba0df;
+    --cr-slider-track-0: #016794;
+    --cr-slider-track-1: #cbe9ff;
+  }
+
+  .page.theater .ad-slot .ad-banner {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 1200px) {
   .page {
     padding: 16px;
@@ -2504,6 +2871,32 @@ onBeforeUnmount(() => {
 
   .channel-banner {
     padding: 10px 5px;
+  }
+
+  /* ---- Theater mode, small-screen half ---------------------------------------
+     The column is already stacked here, so there is no sidebar to reclaim and the
+     desktop rules would be a no-op. What is left to give is edge-to-edge width:
+     drop the page gutter and square off the bezel so the picture runs the full
+     width of the device. The recolouring above still applies, and it needs no
+     hover to stay readable — which matters because touch has no hover. */
+  .page.theater {
+    padding-inline: 0;
+  }
+
+  .page.theater .title-bar,
+  .page.theater .announcement {
+    border-radius: 0;
+    border-inline: 0;
+  }
+
+  .page.theater .bezel {
+    border-radius: 0;
+    border-inline: 0;
+  }
+
+  .page.theater .controls,
+  .page.theater .channel-banner {
+    padding-inline: 16px;
   }
 }
 
