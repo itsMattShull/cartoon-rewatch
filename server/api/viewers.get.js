@@ -1,6 +1,6 @@
 import { defineWebSocketHandler } from 'h3'
 import { recordChannelView, recordVisit } from '../utils/analytics'
-import { normalizeChannelSlug } from '../utils/channels'
+import { getChannels, normalizeChannelSlug } from '../utils/channels'
 import { getSessionCookieName, verifySession } from '../utils/auth'
 import { censorChatText } from '../utils/profanity'
 
@@ -20,6 +20,57 @@ const joinCleanupState = globalState.joinCleanupState || { last: 0 }
 globalState.joinCleanupState = joinCleanupState
 
 const MAX_CHAT_LENGTH = 400
+// Token bucket per connection. Every message can trigger an analytics read-modify-write
+// of the whole JSON store, serialised on one queue, so an unthrottled socket is a
+// single-client denial of service.
+const RATE_BURST = 20
+const RATE_REFILL_PER_SEC = 5
+const KNOWN_CHANNEL_TTL_MS = 30 * 1000
+
+const knownChannelState = globalState.knownChannels || { slugs: new Set(), fetchedAt: 0, loading: null }
+globalState.knownChannels = knownChannelState
+
+/**
+ * Channel slugs are attacker-controlled and land in analytics as object keys, so an
+ * unknown slug is both a poisoned report and unbounded growth in the store. Cached
+ * because this runs on the message path.
+ */
+function refreshKnownChannels() {
+  const now = Date.now()
+  if (now - knownChannelState.fetchedAt < KNOWN_CHANNEL_TTL_MS || knownChannelState.loading) return
+  knownChannelState.loading = getChannels({ includeDefaults: true })
+    .then(({ channels }) => {
+      knownChannelState.slugs = new Set(channels.map((channel) => channel.slug))
+      knownChannelState.fetchedAt = Date.now()
+    })
+    .catch(() => {})
+    .finally(() => {
+      knownChannelState.loading = null
+    })
+}
+
+function isKnownChannel(slug) {
+  if (!slug) return false
+  refreshKnownChannels()
+  // Before the first load resolves, accept nothing rather than everything.
+  return knownChannelState.slugs.has(slug)
+}
+
+function takeToken(peer) {
+  const state = peers.get(peer.id)
+  if (!state) return true
+  const now = Date.now()
+  const elapsed = (now - (state.rateCheckedAt || now)) / 1000
+  const tokens = Math.min(RATE_BURST, (state.rateTokens ?? RATE_BURST) + elapsed * RATE_REFILL_PER_SEC)
+  if (tokens < 1) {
+    state.rateTokens = tokens
+    state.rateCheckedAt = now
+    return false
+  }
+  state.rateTokens = tokens - 1
+  state.rateCheckedAt = now
+  return true
+}
 const JOIN_ANNOUNCE_COOLDOWN_MS = 60 * 60 * 1000
 const VISIT_DEDUP_TTL_MS = 2 * 24 * 60 * 60 * 1000
 const ANALYTICS_TIME_ZONE = 'America/Chicago'
@@ -45,10 +96,39 @@ function parseCookies(header) {
 }
 
 function getSessionFromPeer(peer) {
-  const header = getCookieHeader(peer)
-  const cookies = parseCookies(header)
-  const token = cookies[getSessionCookieName()]
-  return verifySession(token)
+  try {
+    const header = getCookieHeader(peer)
+    const cookies = parseCookies(header)
+    const token = cookies[getSessionCookieName()]
+    return verifySession(token)
+  } catch (error) {
+    return null
+  }
+}
+
+function getHeaderValue(peer, name) {
+  const headers = peer?.request?.headers
+  if (!headers) return ''
+  if (typeof headers.get === 'function') return headers.get(name) || ''
+  const direct = headers[name] ?? headers[name.toLowerCase()]
+  return typeof direct === 'string' ? direct : ''
+}
+
+/**
+ * The WebSocket handshake is the one state-changing surface that never ran an origin
+ * check. SameSite=Lax blocks the pure cross-site case in current browsers, but it is
+ * scoped to the site, not the origin — so any sibling subdomain could open a socket
+ * carrying a visitor's cookie and post chat messages as them.
+ */
+function isSameOriginPeer(peer) {
+  const origin = getHeaderValue(peer, 'origin')
+  if (!origin) return false
+  const host = getHeaderValue(peer, 'host')
+  try {
+    return new URL(origin).host === host
+  } catch (error) {
+    return false
+  }
 }
 
 function normalizeViewerId(value, fallback) {
@@ -195,11 +275,20 @@ function shouldCountChannelView(viewerId, sessionId, dateKey, channel) {
 
 export default defineWebSocketHandler({
   open(peer) {
-    sockets.add(peer)
-    const session = getSessionFromPeer(peer)
-    updatePeer(peer, peer.id, null, false, session?.username || null, session?.id || null, null)
-    broadcastCounts(peer)
-    peer.send(JSON.stringify({ type: 'ack', event: 'open' }))
+    try {
+      if (!isSameOriginPeer(peer)) {
+        peer.close(1008, 'Cross-origin connection rejected')
+        return
+      }
+      sockets.add(peer)
+      const session = getSessionFromPeer(peer)
+      updatePeer(peer, peer.id, null, false, session?.username || null, session?.id || null, null)
+      broadcastCounts(peer)
+      peer.send(JSON.stringify({ type: 'ack', event: 'open' }))
+    } catch (error) {
+      // A throw here takes down chat and viewer counts for the connection.
+      console.error('Viewer socket open failed', error)
+    }
   },
   async message(peer, message) {
     let payload = null
@@ -215,8 +304,11 @@ export default defineWebSocketHandler({
     const type = payload.type
     if (type !== 'hello' && type !== 'channel' && type !== 'chat') return
 
+    if (!takeToken(peer)) return
+
     const viewerId = normalizeViewerId(payload.viewerId, peer.id)
-    const channel = normalizeChannelSlug(payload.channel)
+    const requestedChannel = normalizeChannelSlug(payload.channel)
+    const channel = isKnownChannel(requestedChannel) ? requestedChannel : ''
     const existing = peers.get(peer.id)
     const previousChannel = existing?.channel
     const hasHello = existing?.hasHello === true
@@ -248,11 +340,19 @@ export default defineWebSocketHandler({
     if (type === 'chat') {
       const text = censorChatText(normalizeChatText(payload.text))
       if (!text) return
-      if (!username) {
+      if (!channel) {
+        peer.send(JSON.stringify({ type: 'chat_error', message: 'Pick a channel before chatting.' }))
+        return
+      }
+      // Re-read the handshake cookie rather than trusting the name captured at open():
+      // an expired or cleared session must stop being able to post immediately.
+      const liveSession = getSessionFromPeer(peer)
+      const liveUsername = liveSession?.username || null
+      if (!liveUsername) {
         peer.send(JSON.stringify({ type: 'chat_error', message: 'Sign in required to chat.' }))
         return
       }
-      const safeUsername = censorChatText(username)
+      const safeUsername = censorChatText(liveUsername)
       broadcastChat(channel, {
         type: 'chat',
         channel,

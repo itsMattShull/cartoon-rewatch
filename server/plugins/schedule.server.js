@@ -1,11 +1,22 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { defineNitroPlugin } from '#imports'
 import { getChannels } from '../utils/channels'
-import { normalizeScheduleList, readSchedules } from '../utils/schedules'
+import {
+  getChannelRules,
+  getEffectiveOccurrence,
+  normalizeScheduleList,
+  occurrenceKey,
+  readSchedules
+} from '../utils/schedules'
 import { broadcastToViewers } from '../utils/viewer-broadcast'
 
 const ACTIVE_FILE = 'assets/blocks/active-blocks.json'
+// Applied-occurrence markers live in .data/ (gitignored, already home to analytics.json)
+// rather than under assets/, so a runtime write can never collide with the deploy's
+// `git pull`.
+const STATE_FILE = '.data/schedule-state.json'
 const CHECK_INTERVAL_MS = 60 * 1000
 
 function safeParseJson(raw, fallback) {
@@ -17,64 +28,92 @@ function safeParseJson(raw, fallback) {
   }
 }
 
-async function readActiveBlocks() {
-  const filePath = path.resolve(process.cwd(), ACTIVE_FILE)
+async function readJsonFile(relPath, fallback) {
+  const filePath = path.resolve(process.cwd(), relPath)
   try {
     const raw = await fs.readFile(filePath, 'utf8')
-    return safeParseJson(raw, {})
+    return safeParseJson(raw, fallback)
   } catch (error) {
-    return {}
+    return fallback
   }
 }
 
-async function writeActiveBlocks(mapping) {
-  const filePath = path.resolve(process.cwd(), ACTIVE_FILE)
+// Write-then-rename: a plain writeFile truncates first, so a restart mid-write would
+// leave a zero-byte active-blocks.json and blank every channel.
+async function writeJsonFile(relPath, value) {
+  const filePath = path.resolve(process.cwd(), relPath)
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(mapping, null, 2))
+  const tmpPath = `${filePath}.${crypto.randomBytes(6).toString('hex')}.tmp`
+  await fs.writeFile(tmpPath, JSON.stringify(value, null, 2))
+  await fs.rename(tmpPath, filePath)
 }
 
-async function checkSchedules(state) {
+/**
+ * Reconcile the active block of every channel to whatever the schedule says should be
+ * playing right now.
+ *
+ * This replaces a "what became due since the last tick" scan, which lost occurrences for
+ * good in four separate ways: `lastTick` was reset to now at boot (so every deploy
+ * silently dropped whatever was due during the restart), it was advanced before the
+ * awaits that could throw, a torn read of schedules.json consumed a window, and a
+ * backwards NTP step re-broadcast ground already covered.
+ *
+ * Comparing the applied *occurrence key* rather than the block slug is what keeps this
+ * idempotent and keeps a manual block switch from being stomped every 60 seconds: a
+ * manual switch stamps its own marker, and reconcile only acts when a genuinely new
+ * occurrence comes into effect.
+ */
+async function reconcile(state) {
   const now = Date.now()
-  const lastTick = state.lastTick || now
-  state.lastTick = now
 
   const { channels } = await getChannels({ includeDefaults: true })
-  const known = new Set(channels.map((channel) => channel.slug))
-
   const stored = await readSchedules()
-  const dueByChannel = new Map()
 
-  for (const [slug, entries] of Object.entries(stored.channels || {})) {
-    if (!known.has(slug)) continue
-    const normalized = normalizeScheduleList(entries)
-    for (const entry of normalized) {
-      const startMs = Date.parse(entry.startTime)
-      if (!Number.isFinite(startMs)) continue
-      if (startMs <= lastTick || startMs > now) continue
-      const existing = dueByChannel.get(slug)
-      if (!existing || startMs > existing.startMs) {
-        dueByChannel.set(slug, { ...entry, startMs })
-      }
-    }
-  }
+  const active = await readJsonFile(ACTIVE_FILE, {})
+  const applied = await readJsonFile(STATE_FILE, {})
+  const appliedKeys = applied && typeof applied.appliedKeys === 'object' ? applied.appliedKeys : {}
 
-  if (!dueByChannel.size) return
-
-  const active = await readActiveBlocks()
-  let hasChanges = false
   const changed = {}
+  let hasChanges = false
 
-  for (const [slug, entry] of dueByChannel.entries()) {
-    if (active?.[slug] !== entry.blockSlug) {
-      active[slug] = entry.blockSlug
-      changed[slug] = entry.blockSlug
-      hasChanges = true
+  for (const channel of channels) {
+    const slug = channel.slug
+    const oneOffs = normalizeScheduleList(stored.channels?.[slug] || [])
+    const rules = getChannelRules(stored, slug)
+    if (!oneOffs.length && !rules.length) continue
+
+    const occurrence = getEffectiveOccurrence(oneOffs, rules, now)
+    if (!occurrence) continue
+
+    const key = occurrenceKey(occurrence)
+    const previous = appliedKeys[slug]
+    if (previous === key) continue
+
+    // A manual switch wins until a genuinely NEW occurrence begins. Without the
+    // timestamp comparison, the occurrence that was already in effect when the admin
+    // switched still counts as "not yet applied" and reconcile undoes their choice on
+    // the very next tick.
+    if (typeof previous === 'string' && previous.startsWith('manual:')) {
+      const overriddenAt = Number(previous.slice('manual:'.length))
+      if (Number.isFinite(overriddenAt) && occurrence.startMs <= overriddenAt) continue
     }
+
+    appliedKeys[slug] = key
+    if (active[slug] !== occurrence.blockSlug) {
+      active[slug] = occurrence.blockSlug
+      changed[slug] = occurrence.blockSlug
+    }
+    hasChanges = true
   }
 
   if (!hasChanges) return
 
-  await writeActiveBlocks(active)
+  if (Object.keys(changed).length) {
+    await writeJsonFile(ACTIVE_FILE, active)
+  }
+  await writeJsonFile(STATE_FILE, { appliedKeys, updatedAt: now })
+
+  if (!Object.keys(changed).length) return
 
   broadcastToViewers({
     type: 'schedule_update',
@@ -84,17 +123,32 @@ async function checkSchedules(state) {
 }
 
 export default defineNitroPlugin(() => {
-  const state = globalThis.__crt80_schedule_state || { started: false, lastTick: Date.now() }
+  const state = globalThis.__crt80_schedule_state || { started: false }
   if (state.started) return
   state.started = true
-  state.lastTick = Date.now()
   globalThis.__crt80_schedule_state = state
 
-  const tick = () => {
-    checkSchedules(state).catch((error) => {
-      console.error('Schedule check failed', error)
+  const run = () => {
+    reconcile(state).catch((error) => {
+      console.error('Schedule reconcile failed', error)
     })
   }
 
-  setInterval(tick, CHECK_INTERVAL_MS)
+  // Run immediately rather than waiting a full interval: this is what makes a deploy
+  // spanning an occurrence self-healing instead of silently skipping it.
+  run()
+
+  // Align to the wall-clock minute. With minute-precision rules, a free-running 60s
+  // interval applies changes up to a minute after browsers have already flipped to the
+  // new occurrence, and during that gap the player falls back to the week anchor while
+  // the guide shows the new block.
+  const scheduleNext = () => {
+    const delay = CHECK_INTERVAL_MS - (Date.now() % CHECK_INTERVAL_MS) + 250
+    state.timer = setTimeout(() => {
+      run()
+      scheduleNext()
+    }, delay)
+    if (typeof state.timer?.unref === 'function') state.timer.unref()
+  }
+  scheduleNext()
 })

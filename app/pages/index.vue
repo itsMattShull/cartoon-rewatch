@@ -26,7 +26,9 @@
     <header class="title-bar">
       <div class="brand">
         <span class="brand-mark">Cartoon ReWatch</span>
-        <span class="brand-sub">Grab cereal and enjoy.</span>
+        <!-- Admin-supplied, like the banners above: always rendered through {{ }}.
+             Never switch this to v-html to support markup. -->
+        <span v-if="tagline" class="brand-sub">{{ tagline }}</span>
       </div>
       <div class="clock">
         <span class="clock-label">Local Time</span>
@@ -224,10 +226,15 @@
             </div>
 
             <div v-if="!isChatAuthorized" class="chat-auth">
-              <p>Sign in with Discord to chat.</p>
-              <a class="secondary" href="/api/auth/discord/login?redirect=/&scope=chat">
+              <p v-if="authErrorMessage" class="chat-auth-error">{{ authErrorMessage }}</p>
+              <p v-else>Sign in with Discord to chat.</p>
+              <a class="secondary" :href="chatLoginHref">
                 Sign in with Discord
               </a>
+            </div>
+            <div v-else class="chat-auth signed-in">
+              <p>Chatting as {{ chatUsername }}.</p>
+              <a class="secondary" href="/api/auth/logout?redirect=/">Sign out</a>
             </div>
 
             <form class="chat-input" @submit.prevent="sendChatMessage">
@@ -291,6 +298,13 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { safeImageUrl, safeLinkUrl } from '#shared/url-safety.js'
+import {
+  compareOccurrences,
+  expandRecurringRules,
+  getEffectiveOccurrence,
+  getTimeZoneOffsetMs,
+  normalizeRecurringList
+} from '#shared/schedule-time.js'
 import toonamiData from '../../assets/channels/toonami.json'
 import adultSwimData from '../../assets/channels/adult-swim.json'
 import saturdayMorningData from '../../assets/channels/saturday-morning.json'
@@ -452,6 +466,7 @@ function buildChannel(payload, fallbackName, index, slug, blockSlug) {
 
 const channels = ref([])
 const scheduleByChannel = ref({})
+const recurringByChannel = ref({})
 const blockPlaylists = ref({})
 
 const activeChannelIndex = ref(0)
@@ -474,7 +489,7 @@ const hasLoadedChannel = ref(false)
 const viewerCounts = ref({ total: 0, channels: {} })
 const viewerId = ref(null)
 const activePanel = ref('chat')
-const { data: authData } = await useFetch('/api/auth/me')
+const { data: authData, refresh: refreshAuth } = await useFetch('/api/auth/me')
 // Banners ride along in this existing SSR fetch, so they cost no extra round trip and
 // are present in the first paint. Do not move them to $fetch in onMounted — that
 // reintroduces a post-hydration request and makes every banner shift the layout.
@@ -487,6 +502,9 @@ const announcement = computed(
 const channelStrip = computed(
   () => banners.value?.channelStrip ?? { enabled: false, text: '', linkUrl: '' }
 )
+// Already resolved server-side (absent -> default, '' -> hidden), so SSR and hydration
+// render the same string and the header never shifts after load.
+const tagline = computed(() => banners.value?.tagline?.text ?? '')
 
 // Dismissal lives in a cookie rather than localStorage so the server renders the same
 // thing the client will: reading it after hydration would render the bar for returning
@@ -573,8 +591,30 @@ const weekStartOffset = computed(() => {
   const hour = scheduleSettings.value?.scheduleHour ?? 19
   return day * 86400 + hour * 3600
 })
-const isChatAuthorized = computed(() => authData.value?.authenticated)
+const isChatAuthorized = computed(() => Boolean(authData.value?.authenticated))
 const chatUsername = computed(() => authData.value?.user?.username || '')
+
+const route = useRoute()
+
+// Fixed lookup with a generic fallback — never render the raw query value. Echoing it
+// back would let any link put attacker-chosen copy on the real site.
+const AUTH_ERROR_MESSAGES = {
+  session: 'Your sign-in could not be completed. This is usually a blocked or expired cookie — try again, and check that cookies are enabled.',
+  discord: 'Discord could not confirm your account. Please try again in a moment.',
+  notAllowed: 'That Discord account is not an approved admin. You can still sign in to chat.'
+}
+
+const authErrorMessage = computed(() => {
+  const code = route.query.authError
+  if (typeof code !== 'string' || !code) return ''
+  return AUTH_ERROR_MESSAGES[code] || 'Sign-in failed. Please try again.'
+})
+
+// Return to the page they were on, not always '/'.
+const chatLoginHref = computed(() => {
+  const path = route.fullPath && route.fullPath.startsWith('/') ? route.fullPath : '/'
+  return `/api/auth/discord/login?scope=chat&redirect=${encodeURIComponent(path)}`
+})
 const chatMessagesByChannel = ref({})
 const chatInput = ref('')
 const chatLogRef = ref(null)
@@ -594,6 +634,10 @@ let viewerReconnectDelay = 1000
 let viewerReconnectTimer = null
 let viewerShouldReconnect = true
 let viewerHelloTimer = null
+// Raw block payloads keyed by slug, kept across reloads so a broadcast doesn't refetch
+// blocks this client already has.
+let blockPayloadCache = {}
+let scheduleReloadTimer = null
 const pendingChannelSlug = ref('')
 const storageKey = 'crt80:lastChannel'
 const viewerStorageKey = 'crt80:viewerId'
@@ -621,11 +665,10 @@ const scheduleInfo = computed(() => {
       : null
   }
 
-  const entries = scheduleByChannel.value?.[channel.slug] || []
   const nowMs = now.value.getTime()
   let scheduledStartMs = null
   if (channel.blockSlug) {
-    const latest = getLatestScheduleEntry(entries, nowMs)
+    const latest = getLatestScheduleEntry(channel.slug, nowMs)
     if (latest && latest.blockSlug === channel.blockSlug) {
       scheduledStartMs = latest.startMs
     }
@@ -659,7 +702,11 @@ const volumeDisplay = computed(() => `${Math.round(volumePercent.value)}%`)
 const guideHours = 6
 const hourWidth = 500
 const scheduleTimeZone = 'America/Chicago'
-const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone))
+// A NUMBER, not a Date. getZoneMinuteStart truncates to the minute, but returning a
+// fresh Date object every second meant Vue's identity check fired on every clock tick,
+// invalidating the whole guide — every row, and two toLocaleTimeString calls per block —
+// 60x more often than the value actually changed.
+const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone).getTime())
 
 const requestUrl = useRequestURL()
 const canonicalUrl = computed(() => requestUrl.origin + requestUrl.pathname)
@@ -718,7 +765,7 @@ const guideHeaderSegments = computed(() => {
   let firstSegment = minuteOfHour === 0 ? 3600 : (60 - minuteOfHour) * 60
   while (remaining > 0) {
     const segmentSeconds = Math.min(firstSegment, remaining)
-    const stamp = new Date(guideStart.value.getTime() + cursor * 1000)
+    const stamp = new Date(guideStart.value + cursor * 1000)
     segments.push({
       label: stamp.toLocaleTimeString([], { hour: 'numeric' }),
       durationSeconds: segmentSeconds,
@@ -739,38 +786,14 @@ const guideRows = computed(() => {
   }))
 })
 
-function getTimeZoneOffsetMs(date, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).formatToParts(date)
-
-  const values = {}
-  for (const part of parts) {
-    if (part.type !== 'literal') values[part.type] = part.value
-  }
-
-  const asUTC = Date.UTC(
-    Number(values.year),
-    Number(values.month) - 1,
-    Number(values.day),
-    Number(values.hour),
-    Number(values.minute),
-    Number(values.second)
-  )
-
-  return asUTC - date.getTime()
-}
-
-function getSecondsSinceWeekStartInZone(date, timeZone, weekStartOffsetSeconds = 500400) {
-  const offset = getTimeZoneOffsetMs(date, timeZone)
-  const zoned = new Date(date.getTime() + offset)
+// getTimeZoneOffsetMs now comes from #shared/schedule-time.js — the same implementation
+// the server and the admin form use, so all three agree on when a block starts. The copy
+// that lived here also rebuilt an Intl.DateTimeFormat on every call, which cost ~75µs
+// against ~7µs for the shared (memoised) one, once per second forever.
+function getSecondsSinceWeekStartInZone(input, timeZone, weekStartOffsetSeconds = 500400) {
+  const ms = typeof input === 'number' ? input : input.getTime()
+  const offset = getTimeZoneOffsetMs(ms, timeZone)
+  const zoned = new Date(ms + offset)
   const dayOfWeek = zoned.getUTCDay()
   const secondsSinceSundayMidnight =
     dayOfWeek * 86400 +
@@ -780,9 +803,10 @@ function getSecondsSinceWeekStartInZone(date, timeZone, weekStartOffsetSeconds =
   return (secondsSinceSundayMidnight - weekStartOffsetSeconds + 604800) % 604800
 }
 
-function getZoneMinuteStart(date, timeZone) {
-  const offset = getTimeZoneOffsetMs(date, timeZone)
-  const zoned = new Date(date.getTime() + offset)
+function getZoneMinuteStart(input, timeZone) {
+  const ms = typeof input === 'number' ? input : input.getTime()
+  const offset = getTimeZoneOffsetMs(ms, timeZone)
+  const zoned = new Date(ms + offset)
   zoned.setUTCSeconds(0, 0)
   return new Date(zoned.getTime() - offset)
 }
@@ -807,25 +831,38 @@ function normalizeScheduleEntries(entries) {
     const startTime = typeof entry?.startTime === 'string' ? entry.startTime : ''
     const startMs = Date.parse(startTime)
     if (!id || !blockSlug || !Number.isFinite(startMs)) continue
-    normalized.push({ id, blockSlug, startTime, startMs })
+    normalized.push({ id, blockSlug, startTime, startMs, recurring: false })
   }
-  normalized.sort((a, b) => a.startMs - b.startMs)
+  normalized.sort(compareOccurrences)
   return normalized
 }
 
-function getLatestScheduleEntry(entries, nowMs) {
-  let current = null
-  for (const entry of entries || []) {
-    if (entry.startMs <= nowMs) current = entry
+/**
+ * One-off entries merged with the rule occurrences that fall inside [fromMs, toMs].
+ *
+ * Rules are expanded here rather than on the server on purpose: the whole app is
+ * deterministic by clock, and a rule is too, so a tab left open for a week computes the
+ * same schedule as a freshly loaded one. A server-side expansion would have to pick a
+ * window, and a browser that outlived it would silently drift onto a different episode.
+ */
+function getOccurrencesInRange(channelSlug, fromMs, toMs) {
+  const oneOffs = scheduleByChannel.value?.[channelSlug] || []
+  const rules = recurringByChannel.value?.[channelSlug] || []
+  const merged = oneOffs.filter((entry) => entry.startMs >= fromMs && entry.startMs <= toMs)
+  if (rules.length) {
+    merged.push(...expandRecurringRules(rules, fromMs, toMs, scheduleTimeZone))
   }
-  return current
+  merged.sort(compareOccurrences)
+  return merged
 }
 
-function getNextScheduleEntry(entries, nowMs) {
-  for (const entry of entries || []) {
-    if (entry.startMs > nowMs) return entry
-  }
-  return null
+function getLatestScheduleEntry(channelSlug, nowMs) {
+  return getEffectiveOccurrence(
+    scheduleByChannel.value?.[channelSlug] || [],
+    recurringByChannel.value?.[channelSlug] || [],
+    nowMs,
+    scheduleTimeZone
+  )
 }
 
 function getPlaylistForBlock(slug) {
@@ -892,7 +929,7 @@ function buildGuideBlocks(playlist, startSeconds, windowSeconds) {
   return blocks
 }
 
-function buildGuideBlocksForChannel(channel, windowStart, windowSeconds) {
+function buildGuideBlocksForChannel(channel, windowStartMs, windowSeconds) {
   if (!channel) return []
   const activeSlug = channel.blockSlug
   const activePlaylist = {
@@ -901,28 +938,30 @@ function buildGuideBlocksForChannel(channel, windowStart, windowSeconds) {
   }
   if (!activeSlug || activePlaylist.videos.length === 0) return []
 
-  const entries = scheduleByChannel.value?.[channel.slug] || []
-  const windowStartMs = windowStart.getTime()
   const windowEndMs = windowStartMs + windowSeconds * 1000
-  const nextEntry = getNextScheduleEntry(entries, windowStartMs)
+  const entries = getOccurrencesInRange(channel.slug, windowStartMs, windowEndMs)
 
   const segments = []
   let cursorMs = windowStartMs
-  let nextIndex = nextEntry ? entries.indexOf(nextEntry) : entries.length
   if (cursorMs < windowEndMs) {
-    const segmentEndMs = nextEntry ? Math.min(nextEntry.startMs, windowEndMs) : windowEndMs
+    const segmentEndMs = entries.length ? Math.min(entries[0].startMs, windowEndMs) : windowEndMs
     if (segmentEndMs > cursorMs) {
+      // Anchor the currently-playing cell to the occurrence already in effect, exactly as
+      // scheduleInfo does. Seeding it from the week anchor instead made the guide show a
+      // different show than the player for the whole of the current segment — rare with
+      // hand-placed entries, permanent once a channel has a daily repeat.
+      const current = getLatestScheduleEntry(channel.slug, cursorMs)
       segments.push({
         startMs: cursorMs,
         endMs: segmentEndMs,
         blockSlug: activeSlug,
-        scheduleStartMs: null
+        scheduleStartMs: current && current.blockSlug === activeSlug ? current.startMs : null
       })
     }
     cursorMs = segmentEndMs
   }
 
-  for (let index = nextIndex; index < entries.length && cursorMs < windowEndMs; index += 1) {
+  for (let index = 0; index < entries.length && cursorMs < windowEndMs; index += 1) {
     const entry = entries[index]
     if (!entry || entry.startMs < cursorMs) continue
     const nextStartMs = entries[index + 1]?.startMs ?? windowEndMs
@@ -967,8 +1006,7 @@ function buildGuideBlocksForChannel(channel, windowStart, windowSeconds) {
 }
 
 function formatLocalTimeFromGuide(offsetSeconds) {
-  const base = guideStart.value
-  const stamp = new Date(base.getTime() + offsetSeconds * 1000)
+  const stamp = new Date(guideStart.value + offsetSeconds * 1000)
   return stamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
@@ -1038,7 +1076,14 @@ function handleViewerMessage(event) {
     })
   }
   if (data.type === 'schedule_update' || data.type === 'active_update') {
-    loadActiveBlocks({ syncPlayer: true })
+    // Every connected client receives this in the same instant, and each reload is a
+    // handful of requests. Spread them over a few seconds so a block change doesn't
+    // arrive as one synchronised burst against a single-process server.
+    if (scheduleReloadTimer) return
+    scheduleReloadTimer = window.setTimeout(() => {
+      scheduleReloadTimer = null
+      loadActiveBlocks({ syncPlayer: true })
+    }, Math.random() * 4000)
     return
   }
 }
@@ -1172,6 +1217,21 @@ watch(activeChannelSlug, (slug, prev) => {
     }
   })
 })
+
+// The chat identity is read from the cookie at the WebSocket handshake, so a socket
+// opened while signed out stays anonymous for its whole life. Reconnect when auth flips
+// (a sign-in completed in another tab, or a session that expired) instead of requiring a
+// manual reload before chat works.
+watch(isChatAuthorized, () => {
+  if (typeof window === 'undefined') return
+  if (!viewerShouldReconnect) return
+  connectViewerSocket()
+})
+
+function handleAuthRecheck() {
+  if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+  refreshAuth()
+}
 
 function setChannel(index) {
   if (!channels.value.length) return
@@ -1596,6 +1656,22 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
     }
     scheduleByChannel.value = scheduleMap
 
+    const recurringSource =
+      scheduleResponse?.recurring && typeof scheduleResponse.recurring === 'object'
+        ? scheduleResponse.recurring
+        : {}
+    const recurringMap = {}
+    for (const [slug, rules] of Object.entries(recurringSource)) {
+      // Re-normalised client-side: the stored JSON is not the only route in here, and a
+      // malformed rule must degrade to "no rule" rather than throw during expansion.
+      const normalized = normalizeRecurringList(rules)
+      recurringMap[slug] = normalized
+      for (const rule of normalized) {
+        if (rule.blockSlug) scheduledBlockSlugs.add(rule.blockSlug)
+      }
+    }
+    recurringByChannel.value = recurringMap
+
     const blockSlugs = new Set()
     for (const channel of list) {
       const blockSlug = typeof active?.[channel.slug] === 'string' ? active[channel.slug] : ''
@@ -1605,9 +1681,14 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
       blockSlugs.add(slug)
     }
 
-    const payloads = {}
+    // Only fetch blocks we don't already hold. Every schedule_update broadcast makes all
+    // connected clients re-run this at once; refetching the full set each time turned one
+    // block change into (viewers x blocks) requests in a single burst, and recurring
+    // rules reference more distinct blocks than one-off entries did.
+    const payloads = { ...blockPayloadCache }
+    const missing = [...blockSlugs].filter((slug) => !(slug in payloads))
     await Promise.all(
-      [...blockSlugs].map(async (blockSlug) => {
+      missing.map(async (blockSlug) => {
         try {
           const response = await $fetch(`/api/blocks/${blockSlug}`)
           payloads[blockSlug] = response?.payload || null
@@ -1617,10 +1698,15 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
       })
     )
 
+    // Drop anything no longer referenced so the cache cannot grow without bound.
+    for (const slug of Object.keys(payloads)) {
+      if (!blockSlugs.has(slug)) delete payloads[slug]
+    }
+    blockPayloadCache = payloads
+
     const playlists = {}
     for (const slug of blockSlugs) {
-      const payload = payloads[slug]
-      playlists[slug] = buildPlaylist(payload, slug, 'Video')
+      playlists[slug] = buildPlaylist(payloads[slug], slug, 'Video')
     }
     blockPlaylists.value = playlists
 
@@ -1648,7 +1734,9 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
   } catch (error) {
     channels.value = []
     scheduleByChannel.value = {}
+    recurringByChannel.value = {}
     blockPlaylists.value = {}
+    blockPayloadCache = {}
   }
 }
 
@@ -1690,6 +1778,10 @@ onMounted(async () => {
   syncInterval = window.setInterval(() => {
     syncToSchedule(false)
   }, 15000)
+
+  // Picks up a sign-in completed in another tab, and a session that expired while this
+  // one sat open.
+  document.addEventListener('visibilitychange', handleAuthRecheck)
 })
 
 onBeforeUnmount(() => {
@@ -1704,7 +1796,11 @@ onBeforeUnmount(() => {
   viewerShouldReconnect = false
   if (viewerReconnectTimer) window.clearTimeout(viewerReconnectTimer)
   if (viewerHelloTimer) window.clearTimeout(viewerHelloTimer)
+  if (scheduleReloadTimer) window.clearTimeout(scheduleReloadTimer)
   if (viewerSocket) viewerSocket.close()
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleAuthRecheck)
+  }
 })
 </script>
 
@@ -1743,6 +1839,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* min-width:0 is load-bearing now the tagline is admin-supplied: a flex item defaults
+     to min-width:auto and cannot shrink below its min-content width, so one long
+     unbroken token (a URL, a hashtag) would push the title-bar past its own border and
+     get clipped by .page's overflow-x:hidden with no way to scroll to it. */
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .brand-mark {
@@ -1756,6 +1858,16 @@ onBeforeUnmount(() => {
   font-size: 13px;
   letter-spacing: 0.02em;
   color: var(--cr-text-muted-4);
+  /* Breaks unbroken tokens, and hard-caps header growth at two lines so a long tagline
+     can never push the TV further below the fold. Same clamp pattern as
+     .announcement-text. */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* Keeps a stray RTL run from reordering the line around it. */
+  unicode-bidi: isolate;
 }
 
 .clock {
@@ -2408,6 +2520,15 @@ onBeforeUnmount(() => {
   color: var(--cr-text-muted-4);
 }
 
+.chat-auth-error {
+  color: var(--cr-warning);
+}
+
+.chat-auth.signed-in {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
 .chat-auth a {
   text-decoration: none;
   padding: 6px 10px;
@@ -2922,6 +3043,13 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
+  }
+
+  /* The bar stacks into a left-aligned column here, but .clock keeps align-items:flex-end
+     and renders its text right-aligned inside a shrink-to-fit box. Barely noticeable at
+     one line; obvious once a two-line tagline makes the header taller. */
+  .clock {
+    align-items: flex-start;
   }
 
   .channel-banner {

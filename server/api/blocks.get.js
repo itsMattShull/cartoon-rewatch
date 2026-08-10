@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createError, defineEventHandler } from 'h3'
-import { getSessionFromEvent } from '../utils/auth'
+import { defineEventHandler } from 'h3'
+import { requireAdmin } from '../utils/auth'
 
 const BLOCKS_DIR = 'assets/blocks'
 const INDEX_FILE = 'assets/blocks/blocks-index.json'
@@ -32,10 +32,9 @@ function resolveUserName(name, id, users) {
 }
 
 export default defineEventHandler(async (event) => {
-  const session = getSessionFromEvent(event)
-  if (!session) {
-    throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
-  }
+  // Admin data. A chat-scope cookie is issued to any Discord account that clicks the
+  // site's own chat login, so "is there a session" was not a gate at all.
+  requireAdmin(event)
 
   const blocksDir = path.resolve(process.cwd(), BLOCKS_DIR)
   const indexPath = path.resolve(process.cwd(), INDEX_FILE)

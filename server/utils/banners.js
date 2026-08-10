@@ -20,6 +20,11 @@ export const MAX_ANNOUNCEMENT_CHARS = 140
 export const MAX_STRIP_CHARS = 40
 export const MAX_ALT_CHARS = 120
 export const MAX_LABEL_CHARS = 60
+export const MAX_TAGLINE_CHARS = 48
+
+// The tagline that shipped hardcoded in the header. Used when banners.json predates the
+// tagline key, so an existing deployment reads identically before an admin touches it.
+export const DEFAULT_TAGLINE = 'Grab cereal and enjoy.'
 
 // Uploaded files are content-addressed, so the name is a pure function of the bytes.
 export const UPLOAD_FILENAME = /^[0-9a-f]{32}\.(png|jpg|gif|webp)$/
@@ -35,6 +40,13 @@ const DEFAULTS = {
   announcement: { enabled: false, text: '', linkUrl: '', linkLabel: '' },
   // The channel strip's middle slot, between "CH 01" and the LIVE pill.
   channelStrip: { enabled: false, text: '', linkUrl: '' },
+  // The header sub-line under "Cartoon ReWatch".
+  //
+  // `null` means "never configured" and resolves to DEFAULT_TAGLINE; an empty string
+  // means an admin deliberately cleared it and the line is hidden. The distinction
+  // matters because every existing banners.json predates this key, and collapsing absent
+  // to empty would blank the header on deploy.
+  tagline: { text: null },
   // Seeded with the banner that was previously hardcoded in index.vue so the
   // front page looks identical before an admin touches anything.
   ads: [
@@ -59,16 +71,32 @@ export function defaultBanners() {
   return clone(DEFAULTS)
 }
 
+/**
+ * Resolves the stored tagline sentinel into what should actually render.
+ *
+ * Done once, server-side, so SSR and the hydrated client agree from a single source —
+ * and so the admin form is seeded with the value the visitor sees rather than a blank
+ * box that would save as "hidden".
+ */
+export function withResolvedTagline(banners) {
+  const stored = banners?.tagline?.text
+  return {
+    ...banners,
+    tagline: { text: typeof stored === 'string' ? stored : DEFAULT_TAGLINE }
+  }
+}
+
 function cleanText(value, maxChars) {
   if (typeof value !== 'string') return ''
-  // Strip control characters; they serve no purpose in a banner and make stored
-  // data hard to reason about.
-  let out = ''
-  for (const ch of value) {
-    const code = ch.codePointAt(0)
-    out += code < 32 || code === 127 ? ' ' : ch
-  }
-  return out.trim().slice(0, maxChars)
+  // Strip control characters AND format characters. \p{Cc} covers the C0/C1 controls the
+  // original loop caught; \p{Cf} additionally covers the bidi overrides (U+202E and
+  // friends) and zero-width characters, which survive a control-only filter and let a
+  // single banner field reverse the rendering direction of the whole header.
+  const stripped = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').normalize('NFC')
+  // Cap by code point, not code unit: String#slice counts UTF-16 units, so cutting a run
+  // of emoji at the limit can leave a lone surrogate in the stored JSON and the SSR'd
+  // HTML.
+  return Array.from(stripped.trim()).slice(0, maxChars).join('').trim()
 }
 
 function toBool(value) {
@@ -116,7 +144,15 @@ export function normalizeBanners(raw) {
     ? raw.ads.slice(0, MAX_ADS).map(normalizeAd)
     : []
 
+  // Absent (or a non-string) stays null so it can resolve to the default at render time.
+  // Only an actual string — including '' — counts as an admin decision.
+  const taglineText =
+    typeof raw?.tagline?.text === 'string'
+      ? cleanText(raw.tagline.text, MAX_TAGLINE_CHARS)
+      : null
+
   return {
+    tagline: { text: taglineText },
     announcement: {
       enabled: toBool(raw?.announcement?.enabled) && Boolean(announcementText),
       text: announcementText,
