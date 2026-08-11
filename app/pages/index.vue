@@ -1851,7 +1851,7 @@ onBeforeUnmount(() => {
   font-size: 27px;
   letter-spacing: 0.09em;
   color: var(--cr-accent);
-  text-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--cr-accent) 40%, transparent);
 }
 
 .brand-sub {
@@ -2003,7 +2003,7 @@ onBeforeUnmount(() => {
   font-size: 28px;
   letter-spacing: 0.1em;
   color: var(--cr-text-muted-3);
-  text-shadow: 0 0 12px rgba(164, 227, 255, 0.4);
+  text-shadow: 0 0 12px var(--cr-accent-glow);
   background: radial-gradient(circle at center, var(--cr-surface-screen-off) 0%, var(--cr-surface-void) 80%);
 }
 
@@ -2014,7 +2014,7 @@ onBeforeUnmount(() => {
   padding: 10px 16px;
   border-radius: 999px;
   border: 1px solid var(--cr-text-ctrl);
-  background: rgba(16, 26, 37, 0.85);
+  background: var(--cr-scrim-overlay);
   color: var(--cr-text-ctrl);
   font-family: var(--cr-font);
   font-size: 15px;
@@ -2245,8 +2245,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(159, 224, 255, 0.8);
-  background: linear-gradient(180deg, rgba(16, 42, 62, 0.95), rgba(14, 29, 42, 0.95));
+  border: 1px solid var(--cr-accent-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--cr-chip-grad-0) 95%, transparent), color-mix(in srgb, var(--cr-chip-grad-1) 95%, transparent));
   color: var(--cr-accent);
   font-size: 13px;
   text-transform: none;
@@ -2257,13 +2257,13 @@ onBeforeUnmount(() => {
 }
 
 .channel-name a[data-patreon-widget-type]:hover {
-  border-color: rgba(159, 224, 255, 1);
+  border-color: var(--cr-accent);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
   transform: translateY(-1px);
 }
 
 .channel-name a[data-patreon-widget-type]:focus-visible {
-  outline: 2px solid rgba(159, 224, 255, 0.9);
+  outline: 2px solid color-mix(in srgb, var(--cr-accent) 90%, transparent);
   outline-offset: 2px;
 }
 
@@ -2422,7 +2422,7 @@ onBeforeUnmount(() => {
 
 .tab-button {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.2);
   color: var(--cr-text-ctrl);
   padding: 8px 10px;
@@ -2436,13 +2436,13 @@ onBeforeUnmount(() => {
 .tab-button.active {
   border-color: var(--cr-accent);
   color: var(--cr-accent);
-  background: rgba(159, 224, 255, 0.12);
+  background: var(--cr-accent-soft-2);
 }
 
 .panel-section {
   display: grid;
   gap: 12px;
-  border: 1px dashed rgba(37, 112, 158, 0.6);
+  border: 1px dashed color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.2);
   padding: 12px;
@@ -2514,7 +2514,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.2);
   font-size: 12px;
   color: var(--cr-text-muted-4);
@@ -2547,7 +2547,7 @@ onBeforeUnmount(() => {
 
 .chat-input input {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.3);
   color: var(--cr-text);
   padding: 8px 10px;
@@ -2557,8 +2557,8 @@ onBeforeUnmount(() => {
 
 .chat-input button {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
-  background: rgba(159, 224, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
+  background: var(--cr-accent-soft-2);
   color: var(--cr-accent);
   padding: 8px 14px;
   font-family: var(--cr-font);
@@ -2609,7 +2609,7 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
   padding: 12px;
   border-radius: 12px;
-  border: 1px solid rgba(53, 154, 204, 0.45);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 45%, transparent);
   background: rgba(0, 0, 0, 0.3);
 }
 
@@ -2698,7 +2698,7 @@ onBeforeUnmount(() => {
 .toggle.active,
 .channel-button.active {
   border-color: var(--cr-accent);
-  box-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cr-accent) 40%, transparent);
 }
 
 .guide {
@@ -2728,7 +2728,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   background: rgba(0, 0, 0, 0.35);
   border-radius: 8px;
-  border: 1px solid rgba(53, 154, 204, 0.4);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 40%, transparent);
   display: flex;
   align-items: center;
 }
@@ -2752,7 +2752,7 @@ onBeforeUnmount(() => {
 .guide-hour {
   font-variant-numeric: tabular-nums;
   padding: 6px 8px;
-  border: 1px solid rgba(53, 154, 204, 0.35);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 35%, transparent);
   border-right: none;
   color: var(--cr-accent);
   background: rgba(0, 0, 0, 0.4);
@@ -2763,7 +2763,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-hour:last-child {
-  border-right: 1px solid rgba(53, 154, 204, 0.35);
+  border-right: 1px solid color-mix(in srgb, var(--cr-line-strong) 35%, transparent);
 }
 
 .guide-row {
@@ -2775,8 +2775,8 @@ onBeforeUnmount(() => {
 
 .guide-block {
   height: 100%;
-  background: linear-gradient(135deg, rgba(16, 44, 66, 0.95), rgba(14, 27, 39, 0.95));
-  border: 1px solid rgba(53, 154, 204, 0.5);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--cr-guide-block-0) 95%, transparent), color-mix(in srgb, var(--cr-guide-block-1) 95%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 50%, transparent);
   border-right: none;
   padding: 8px 10px;
   display: flex;
@@ -2786,7 +2786,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-block:last-child {
-  border-right: 1px solid rgba(53, 154, 204, 0.5);
+  border-right: 1px solid color-mix(in srgb, var(--cr-line-strong) 50%, transparent);
 }
 
 .guide-title {
