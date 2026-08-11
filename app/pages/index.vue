@@ -298,6 +298,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { safeImageUrl, safeLinkUrl } from '#shared/url-safety.js'
+import { buildPaletteStyle, derivePalette } from '#shared/palette.js'
 import {
   compareOccurrences,
   expandRecurringRules,
@@ -545,6 +546,50 @@ const theaterMode = computed({
   }
 })
 
+// The channel whose colour scheme is showing. A cookie for the same reason as the two
+// above: the palette changes the colour of the entire page, and localStorage cannot be
+// read during SSR, so every returning viewer would get a flash of the previous channel's
+// colours and a full-page recolour on load.
+//
+// This makes / vary on a THIRD cookie — see the note on theaterCookie above; / must stay
+// uncacheable if a CDN is ever put in front of it.
+//
+// A slug, not the index the old localStorage key held. loadActiveBlocks filters the list
+// to channels that currently have an active block and then re-indexes it, so index 2
+// means a different channel depending on what is scheduled. `decode: rawCookie` for the
+// same destr reason as the others, and it matters here beyond digits: channel slugs are
+// admin-created with no reserved-word check, so a channel called `true`, `null` or `2000`
+// would read back as a non-string and throw on lookup.
+const channelCookie = useCookie('crt80_channel', {
+  maxAge: 60 * 60 * 24 * 180,
+  sameSite: 'lax',
+  path: '/',
+  decode: rawCookie
+})
+
+// Seeded from the cookie on BOTH sides so the server and the first client render agree.
+// Deliberately not driven off activeChannelSlug, which is '' until loadActiveBlocks
+// resolves after mount and would therefore mismatch SSR immediately.
+const paletteSlug = ref(typeof channelCookie.value === 'string' ? channelCookie.value : '')
+
+const brandColor = computed(() => {
+  const theme = scheduleSettings.value?.theme
+  if (!theme) return ''
+  return theme.colors?.[paletteSlug.value] || theme.default || ''
+})
+
+// Emitted as --cr-ch-* inputs in an inline style attribute on <html>, which theme.css's
+// var() fallbacks consume. See buildPaletteStyle for why the indirection.
+const paletteStyle = computed(() => buildPaletteStyle(brandColor.value))
+
+// What the mobile browser's address bar butts against: the top of .page's radial
+// gradient normally, and the flat root surface in theater mode. Theater is a cookie, so
+// this is already correct during SSR.
+const themeColor = computed(() => {
+  const palette = derivePalette(brandColor.value).base
+  return theaterMode.value ? palette['--cr-surface-root'] : palette['--cr-surface-page-top']
+})
+
 function announcementKey(text) {
   // Short, stable, cookie-safe fingerprint of the current announcement text.
   let hash = 0
@@ -639,7 +684,9 @@ let viewerHelloTimer = null
 let blockPayloadCache = {}
 let scheduleReloadTimer = null
 const pendingChannelSlug = ref('')
-const storageKey = 'crt80:lastChannel'
+// Superseded by the crt80_channel cookie. Read once on mount to migrate anyone whose
+// preference is still only in localStorage, then removed.
+const legacyStorageKey = 'crt80:lastChannel'
 const viewerStorageKey = 'crt80:viewerId'
 
 const activeChannel = computed(() => channels.value[activeChannelIndex.value])
@@ -710,20 +757,52 @@ const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone
 
 const requestUrl = useRequestURL()
 const canonicalUrl = computed(() => requestUrl.origin + requestUrl.pathname)
-const socialImageUrl = computed(() => `${requestUrl.origin}/logo.png`)
-const socialImageWidth = 1204
-const socialImageHeight = 623
+// The link-preview image. Falls back to the logo that was hardcoded here, at the
+// dimensions it actually is, so an untouched deployment unfurls exactly as before.
+const DEFAULT_SOCIAL_IMAGE = { path: '/logo.png', width: 1204, height: 623, type: 'image/png', alt: 'Cartoon ReWatch logo' }
+
+const EMBED_MIME = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
+
+const socialImage = computed(() => {
+  const embed = banners.value?.embed
+  // normalizeEmbed only ever stores an uploaded /api/banner-image/<hash>.<ext> path, so
+  // the extension is one of four known values rather than something guessed off a URL.
+  const match = /^\/api\/banner-image\/[0-9a-f]{32}\.(png|jpg|gif|webp)$/.exec(embed?.imageUrl || '')
+  if (!match) return DEFAULT_SOCIAL_IMAGE
+  return {
+    path: embed.imageUrl,
+    // probeImage legitimately returns 0x0 for a JPEG whose dimensions it could not find.
+    // Facebook rejects an image advertised as 0 wide, so the tags are omitted below
+    // rather than sent as zeroes.
+    width: embed.width || 0,
+    height: embed.height || 0,
+    type: EMBED_MIME[match[1]],
+    alt: embed.alt || DEFAULT_SOCIAL_IMAGE.alt
+  }
+})
+const socialImageUrl = computed(() => `${requestUrl.origin}${socialImage.value.path}`)
+
 const pageTitle = 'Cartoon ReWatch — Live Cartoon Channel Player'
 const pageDescription =
   'Stream a nostalgic, always-on cartoon channel with classic blocks from Toonami, Adult Swim, Saturday Mornings, and more.'
 
 useHead({
   title: pageTitle,
-  htmlAttrs: { lang: 'en' },
+  htmlAttrs: {
+    lang: 'en',
+    // The per-channel palette. Passed as the computed itself, NOT paletteStyle.value:
+    // every other entry in this call unwraps eagerly because those values are constant,
+    // but this one has to stay reactive or the page never recolours on a channel flip.
+    style: paletteStyle
+  },
   meta: [
     { name: 'description', content: pageDescription },
     { name: 'robots', content: 'index,follow' },
-    { name: 'theme-color', content: 'var(--cr-surface-4)' },
+    // Was `var(--cr-surface-4)`, which is not valid in a meta attribute and did nothing.
+    // Now the real colour, tracking the channel — and --cr-surface-page-top rather than
+    // -4, because the top of .page's gradient is what the mobile address bar butts
+    // against. Theater mode paints .page flat --cr-surface-root instead.
+    { name: 'theme-color', content: themeColor },
     { property: 'og:title', content: pageTitle },
     { property: 'og:description', content: pageDescription },
     { property: 'og:type', content: 'website' },
@@ -732,14 +811,12 @@ useHead({
     { name: 'twitter:card', content: 'summary_large_image' },
     { name: 'twitter:title', content: pageTitle },
     { name: 'twitter:description', content: pageDescription },
-    { property: 'og:image', content: socialImageUrl.value },
-    { property: 'og:image:secure_url', content: socialImageUrl.value },
-    { property: 'og:image:width', content: String(socialImageWidth) },
-    { property: 'og:image:height', content: String(socialImageHeight) },
-    { property: 'og:image:type', content: 'image/png' },
-    { property: 'og:image:alt', content: 'Cartoon ReWatch logo' },
-    { name: 'twitter:image', content: socialImageUrl.value },
-    { name: 'twitter:image:alt', content: 'Cartoon ReWatch logo' }
+    { property: 'og:image', content: socialImageUrl },
+    { property: 'og:image:secure_url', content: socialImageUrl },
+    { property: 'og:image:type', content: () => socialImage.value.type },
+    { property: 'og:image:alt', content: () => socialImage.value.alt },
+    { name: 'twitter:image', content: socialImageUrl },
+    { name: 'twitter:image:alt', content: () => socialImage.value.alt }
   ],
   link: [{ rel: 'canonical', href: canonicalUrl.value }],
   script: [
@@ -755,6 +832,18 @@ useHead({
     }
   ]
 })
+
+// Split out because unhead drops a meta tag whose content is '' but happily emits
+// `content="0"`, and an og:image:width of 0 makes Facebook reject the image outright.
+useHead(() => ({
+  meta: socialImage.value.width && socialImage.value.height
+    ? [
+        { property: 'og:image:width', content: String(socialImage.value.width) },
+        { property: 'og:image:height', content: String(socialImage.value.height) }
+      ]
+    : []
+}))
+
 const guideHeaderSegments = computed(() => {
   const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone, weekStartOffset.value)
   const minuteOfHour = Math.floor((startSeconds % 3600) / 60)
@@ -1236,10 +1325,50 @@ function handleAuthRecheck() {
 function setChannel(index) {
   if (!channels.value.length) return
   activeChannelIndex.value = index
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(storageKey, String(index))
+  const slug = channels.value[index]?.slug || ''
+  if (slug) {
+    channelCookie.value = slug
+    // Repaints the page in the new channel's colours. One attribute write; the palette
+    // itself is memoised per hex, so flipping back and forth costs a Map lookup.
+    paletteSlug.value = slug
   }
   syncToSchedule(true)
+}
+
+/**
+ * Restores the viewer's last channel. Must run AFTER loadActiveBlocks().
+ *
+ * The version this replaces ran at the top of onMounted and compared the saved index
+ * against `channels.value.length` — but `channels` is `ref([])` until loadActiveBlocks
+ * resolves further down the same function, so the guard was `saved < 0` and the restore
+ * has never once fired. Anyone who switched channels got dropped back to channel 1 on
+ * every load.
+ *
+ * Resolving by slug rather than index also fixes the reason an index was never right:
+ * loadActiveBlocks filters to channels with an active block and re-indexes, so a stored
+ * index silently points at a different channel whenever scheduling changes.
+ */
+function restoreSavedChannel() {
+  if (typeof window === 'undefined' || !channels.value.length) return
+
+  let slug = typeof channelCookie.value === 'string' ? channelCookie.value : ''
+
+  if (!slug) {
+    const legacy = Number.parseInt(window.localStorage.getItem(legacyStorageKey) || '', 10)
+    if (Number.isFinite(legacy) && legacy >= 0 && legacy < channels.value.length) {
+      slug = channels.value[legacy]?.slug || ''
+    }
+  }
+  window.localStorage.removeItem(legacyStorageKey)
+  if (!slug) return
+
+  const index = channels.value.findIndex((channel) => channel.slug === slug)
+  // A channel that no longer exists, or has no active block, leaves us on the default.
+  if (index < 0) return
+
+  activeChannelIndex.value = index
+  channelCookie.value = slug
+  paletteSlug.value = slug
 }
 
 function nextChannel() {
@@ -1749,12 +1878,6 @@ function handleTheaterKeydown(event) {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleTheaterKeydown)
-  if (typeof window !== 'undefined') {
-    const saved = Number.parseInt(window.localStorage.getItem(storageKey) || '', 10)
-    if (Number.isFinite(saved) && saved >= 0 && saved < channels.value.length) {
-      activeChannelIndex.value = saved
-    }
-  }
   viewerId.value = getOrCreateViewerId()
   pageSessionId.value = getOrCreatePageSessionId()
   hasLoadedChannel.value = true
@@ -1764,6 +1887,7 @@ onMounted(async () => {
   }, 1000)
 
   await loadActiveBlocks()
+  restoreSavedChannel()
   viewerShouldReconnect = true
   connectViewerSocket()
   syncToSchedule(true)
