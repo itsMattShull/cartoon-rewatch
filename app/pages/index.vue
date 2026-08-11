@@ -494,7 +494,7 @@ const { data: authData, refresh: refreshAuth } = await useFetch('/api/auth/me')
 // Banners ride along in this existing SSR fetch, so they cost no extra round trip and
 // are present in the first paint. Do not move them to $fetch in onMounted — that
 // reintroduces a post-hydration request and makes every banner shift the layout.
-const { data: scheduleSettings } = await useFetch('/api/settings')
+const { data: scheduleSettings, refresh: refreshSettings } = await useFetch('/api/settings')
 
 const banners = computed(() => scheduleSettings.value?.banners ?? null)
 const announcement = computed(
@@ -575,7 +575,12 @@ const paletteSlug = ref(typeof channelCookie.value === 'string' ? channelCookie.
 const brandColor = computed(() => {
   const theme = scheduleSettings.value?.theme
   if (!theme) return ''
-  return theme.colors?.[paletteSlug.value] || theme.default || ''
+  // activeColor, not default, is the fallback: on a first visit there is no cookie, so
+  // the server resolved the colour of the channel this viewer is about to land on —
+  // the first one with an active block, which is the same rule restoreSavedChannel
+  // applies on the client. Falling back to the site default here instead would render
+  // the wrong palette on the server and repaint after hydration.
+  return theme.colors?.[paletteSlug.value] || theme.activeColor || theme.default || ''
 })
 
 // Emitted as --cr-ch-* inputs in an inline style attribute on <html>, which theme.css's
@@ -683,6 +688,7 @@ let viewerHelloTimer = null
 // blocks this client already has.
 let blockPayloadCache = {}
 let scheduleReloadTimer = null
+let themeRevalidateTimer = null
 const pendingChannelSlug = ref('')
 // Superseded by the crt80_channel cookie. Read once on mount to migrate anyone whose
 // preference is still only in localStorage, then removed.
@@ -1360,11 +1366,18 @@ function restoreSavedChannel() {
     }
   }
   window.localStorage.removeItem(legacyStorageKey)
-  if (!slug) return
 
-  const index = channels.value.findIndex((channel) => channel.slug === slug)
-  // A channel that no longer exists, or has no active block, leaves us on the default.
-  if (index < 0) return
+  const index = slug ? channels.value.findIndex((channel) => channel.slug === slug) : -1
+
+  // No stored preference, or it names a channel that has since been removed or lost its
+  // active block: stay on whichever channel is showing, but adopt ITS colour. Without
+  // this a first-time visitor watches channel 1 under the site default palette rather
+  // than that channel's own, until they happen to switch away and back.
+  if (index < 0) {
+    const current = channels.value[activeChannelIndex.value]?.slug || ''
+    if (current) paletteSlug.value = current
+    return
+  }
 
   activeChannelIndex.value = index
   channelCookie.value = slug
@@ -1869,6 +1882,30 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
   }
 }
 
+// A scheduled colour starts and ends on a civil-date boundary, so there is exactly one
+// moment a left-open tab needs to hear about: the next local midnight, which the server
+// already computed as theme.revalidateAt. One timer, not a poll.
+//
+// Skipped entirely under prefers-reduced-motion. Recolouring the whole page under
+// someone who is sitting reading it, with no interaction of their own, is a large
+// involuntary visual change — exactly what that preference is asking us not to do. They
+// get the palette the page loaded with until they reload.
+function scheduleThemeRevalidate() {
+  if (typeof window === 'undefined') return
+  window.clearTimeout(themeRevalidateTimer)
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+  const at = Number(scheduleSettings.value?.theme?.revalidateAt)
+  if (!Number.isFinite(at)) return
+  // setTimeout clamps above ~24.8 days and fires immediately on a negative delay; both
+  // are reachable with a skewed clock, so bound the wait and re-arm rather than trust it.
+  const delay = Math.min(Math.max(at - Date.now(), 60_000), 6 * 3600_000)
+  themeRevalidateTimer = window.setTimeout(async () => {
+    await refreshSettings()
+    scheduleThemeRevalidate()
+  }, delay)
+}
+
 // Without this the only way out of theater mode is the Controls tab, which is not the
 // default tab — so a viewer who toggles it on while reading chat has no visible exit.
 function handleTheaterKeydown(event) {
@@ -1888,6 +1925,7 @@ onMounted(async () => {
 
   await loadActiveBlocks()
   restoreSavedChannel()
+  scheduleThemeRevalidate()
   viewerShouldReconnect = true
   connectViewerSocket()
   syncToSchedule(true)
@@ -1912,6 +1950,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleTheaterKeydown)
   if (clockInterval) window.clearInterval(clockInterval)
   if (syncInterval) window.clearInterval(syncInterval)
+  if (themeRevalidateTimer) window.clearTimeout(themeRevalidateTimer)
   if (resizeObserver) resizeObserver.disconnect()
   if (player && player.destroy) player.destroy()
   if (dailymotionPlayer && typeof dailymotionPlayer.destroy === 'function') {

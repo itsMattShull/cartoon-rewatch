@@ -1575,13 +1575,11 @@ input[type='time'] {
    controls on one line does not fit a 375px viewport. */
 .colour-controls {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  /* Two trailing auto columns so Preview and Reset sit side by side. A single auto
+     column forced the second button onto its own row and left a gap beside it. */
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
-}
-
-.colour-controls .ghost {
-  grid-column: 3;
 }
 
 /* A bare colour input is ~40x24 on iOS and ignores padding and background. */
@@ -1878,11 +1876,17 @@ input[type='time'] {
 }
 
 @media (max-width: 600px) {
+  /* Swatch and hex on the first row, the buttons sharing the second: four columns do
+     not fit 375px once a channel name like "Saturday Morning" is in play. */
   .colour-controls {
     grid-template-columns: 44px minmax(0, 1fr);
   }
 
   .colour-controls .ghost {
+    grid-column: span 1;
+  }
+
+  .colour-controls .ghost:only-of-type {
     grid-column: span 2;
   }
 }

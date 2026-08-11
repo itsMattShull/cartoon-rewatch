@@ -2,6 +2,7 @@ import { defineEventHandler, getCookie } from 'h3'
 import { readSettings } from '../../utils/settings'
 import { defaultBanners, readBanners, withResolvedTagline } from '../../utils/banners'
 import { getChannels } from '../../utils/channels'
+import { filterToActive, readActiveBlocks } from '../../utils/active-blocks'
 import { defaultTheme, resolveChannelColors } from '#shared/theme-config.js'
 
 // Public. The front page already awaits this during SSR, so banners ride along here
@@ -30,8 +31,13 @@ export default defineEventHandler(async (event) => {
   // What ships instead is every channel's answer plus when the answer next changes, so a
   // channel flip is a map lookup and there is nothing to recompute on a timer.
   let theme
+  let visibleChannels = []
   try {
-    const { channels } = await getChannels({ includeDefaults: true })
+    const [{ channels }, active] = await Promise.all([
+      getChannels({ includeDefaults: true }),
+      readActiveBlocks()
+    ])
+    visibleChannels = filterToActive(channels, active)
     theme = resolveChannelColors(
       banners.theme ?? defaultTheme(),
       channels.map((channel) => channel.slug),
@@ -42,11 +48,18 @@ export default defineEventHandler(async (event) => {
   }
 
   // The palette for the channel this visitor is about to see, so the first paint is
-  // already the right colour. An unknown or malformed cookie simply misses the lookup
-  // and falls through to the site default.
+  // already the right colour. An unknown or malformed cookie — and the cookie is
+  // attacker-supplied, since anyone can set one — simply misses the lookup.
+  //
+  // With no cookie the visitor lands on the first channel that has an active block, so
+  // the palette has to be THAT channel's, not the site default. Getting this wrong is not
+  // cosmetic: the client would adopt the right colour after hydration and repaint, which
+  // is the flash the cookie exists to prevent.
   const cookieSlug = getCookie(event, 'crt80_channel')
-  const activeColor =
-    (typeof cookieSlug === 'string' && theme.colors[cookieSlug]) || theme.default
+  const fallbackSlug = visibleChannels[0]?.slug || ''
+  const activeSlug =
+    (typeof cookieSlug === 'string' && theme.colors[cookieSlug] && cookieSlug) || fallbackSlug
+  const activeColor = theme.colors[activeSlug] || theme.default
 
   // theme is stripped from the public banners payload: it holds the scheduled-colour
   // rules, whose labels and dates are admin-authored and have no business being in the

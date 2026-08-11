@@ -14,6 +14,8 @@ The app plays channel blocks (YouTube and Dailymotion), supports live channel sw
 - Discord OAuth for authentication
 - Admin analytics dashboard (unique viewers, returning %, visits, channel breakdown)
 - Editable site banners (announcement bar, sidebar ad banners, channel strip text)
+- Per-channel colour schemes, with date-ranged scheduled overrides
+- Configurable link-preview (og:image) image
 
 ## Tech Stack
 
@@ -87,7 +89,7 @@ This project stores most runtime content as JSON:
 
 Runtime-only state lives under `.data/` (gitignored, preserved across deploys):
 
-- `.data/banners.json` - banner configuration
+- `.data/banners.json` - banner, colour-scheme and embed-image configuration
 - `.data/banners/` - uploaded banner images, named by content hash
 - `.data/analytics.json` - analytics store
 
@@ -137,7 +139,9 @@ Banners are edited at `/admin/settings` and stored in `.data/banners.json`:
   `/api/banners/save` replaces the whole config rather than patching it, so any new field
   must be added to `DEFAULTS` and `normalizeBanners` in `server/utils/banners.js` *and* to
   `emptyBanners()`/`cloneBanners()` in `app/pages/admin/settings.vue`, or it is erased on
-  every save.
+  every save. That now covers `theme` and `embed` too — and `cloneBanners` does a shallow
+  per-key merge, so nested structures like `theme.channels` and `theme.overrides` need
+  explicit deep copies there or editing the form silently mutates the saved baseline.
 
 - **Announcement banner** - dismissible bar at the top of the front page. Dismissal is
   keyed to the message text, so editing the text re-shows it to everyone.
@@ -148,7 +152,13 @@ Banners are edited at `/admin/settings` and stored in `.data/banners.json`:
 Images can be an external `https` URL or uploaded. Uploads accept PNG, JPEG, GIF and
 WebP up to 2 MB, identified by magic bytes rather than by filename or content type
 (SVG is rejected — it can carry scripts). Files are stored under a content-hash name and
-served from `/api/banner-image/<hash>.<ext>` with immutable caching. Set
+served from `/api/banner-image/<hash>.<ext>` with immutable caching and an `ETag`.
+
+`pruneOrphanUploads` finds referenced files by walking the whole config for
+`/api/banner-image/` URLs, rather than reading a hardcoded field list — so a new
+image-bearing field is covered by construction instead of being silently collected on the
+next unrelated save. It also skips files newer than 15 minutes, which closes a race where
+a save landing between an upload and its assignment deleted the fresh file. Set
 `client_max_body_size 2m;` on the upload path in nginx so oversized bodies are rejected
 before Node buffers them.
 
@@ -157,6 +167,114 @@ Default channel payloads currently exist in:
 - `assets/channels/toonami.json`
 - `assets/channels/adult-swim.json`
 - `assets/channels/saturday-morning.json`
+
+## Colour Schemes
+
+Each channel can carry a brand hex; the front page recolours when a viewer switches
+channel. Edited at `/admin/settings`, stored in `.data/banners.json` under `theme`
+alongside the banners, so colours, banners and the embed image are one config, one lock,
+one atomic write and **one save button**. `/api/banners/save` replaces the whole config,
+so two save buttons against one file would be a lost-update footgun.
+
+### How the palette is derived
+
+`shared/palette.js` rotates the shipped blue palette in `app/assets/css/theme.css` to the
+chosen hue. It holds **WCAG relative luminance** fixed, not OKLCH lightness.
+
+That distinction is the whole design. OKLCH `L` is a perceptual lightness; WCAG contrast
+is a function of relative luminance on linearised sRGB. At fixed `L` and chroma, sweeping
+hue moves luminance by up to ~1.4x — so "rotate hue, keep L", which looks obviously
+correct, silently breaks contrast. Measured on this palette's own documented anchor pair
+(`--cr-brand-500` on `--cr-surface-page-top`, a 1.4.11 border):
+
+| approach | range over the hue circle |
+| --- | --- |
+| keep OKLCH L | 2.82 – 3.14 (under 3:1 for over half of it) |
+| keep WCAG luminance | 3.01 – 3.03 |
+
+The damage concentrates where foreground and background carry different chroma, because
+that is where their luminance shifts stop cancelling.
+
+`node scripts/check-palette.mjs` makes this a property rather than a claim: it asserts the
+reference tables have not drifted from the stylesheets, then sweeps 120 hues x 330 colour
+pairs asserting none crosses below its WCAG bar and none loses more than 1.5% of its
+ratio. **Run it after editing `theme.css`, `palette.js`, or the theater block in
+`index.vue`** — `palette.js` necessarily carries a second copy of those literals.
+
+`--cr-brand-500` and `--cr-line-2` sit one and two 8-bit steps above where they were
+originally hand-picked. Both cleared 3:1 by less than the quantisation floor, so a
+rotation holding luminance to within a rounding step could still tip them under.
+
+### Where the tokens go
+
+Every token in `theme.css` is `var(--cr-ch-<name>, <shipped literal>)`. The derived
+palette arrives as `--cr-ch-*` **inputs** in an inline `style` attribute on `<html>`. The
+indirection is load-bearing three times over:
+
+- An inline style attribute cannot lose a source-order fight with the Nuxt CSS bundle.
+- `theme.css` can still override the real `--cr-*` tokens inside a media query — which is
+  how forced-colors and `prefers-contrast` viewers get the audited blue back. Setting
+  `--cr-*` directly on `<html>` would need `!important` on ~70 declarations to undo.
+- If the attribute is absent, every `var()` falls back to the shipped literal and the site
+  renders exactly as it did before this feature.
+
+Theater mode's dim tokens work the same way, via `--cr-ch-theater-*`, and stay in
+`index.vue`'s scoped block rather than being generated.
+
+Status and chart colours are **not** rotated — they are distinguished by hue, and
+rotating them would make "Saved" and "Failed" identical but for their text. The trade is
+that a warm brand hue reduces their separation from ordinary chrome, so the admin panel
+warns when the chosen hue lands within 25 degrees of one.
+
+### Scheduled overrides
+
+Overrides are civil **date ranges** (`startDate`/`endDate`, end inclusive), not recurring
+rules, and deliberately do not reuse `shared/schedule-time.js`'s rule engine:
+
+- `getEffectiveOccurrence` means "latest occurrence at or before now, runs until
+  replaced", with an 8-day lookback. A bounded window contradicts both.
+- `normalizeRecurringRule` rejects any rule without a `blockSlug`.
+- A wall-clock start plus a duration reintroduces the DST bug `zonedWallToUtc` exists to
+  eliminate: "all day" as `00:00 + 1440 minutes` overruns the 23-hour day and leaves a
+  one-hour hole at 23:00 on the 25-hour day, once a year, silently.
+- Date granularity also means SSR and a client with a skewed clock cannot disagree.
+
+Resolution order is override (channel-scoped beats site-wide, then narrower range, then
+id) → the channel's own colour → the site default.
+
+`/api/settings` is public, so it ships each channel's **resolved** colour plus
+`revalidateAt` (the next local midnight), never the rules themselves — those carry
+admin-authored labels and dates. The admin form reads the raw config from the
+admin-gated `/api/banners/config`.
+
+### First paint
+
+`crt80_channel` holds the active channel **slug** so the server can pick the palette
+before rendering. This is the third per-viewer cookie on `/` (with `crt80_theater` and
+`crt80_ann_dismissed`), so **`/` must stay uncacheable if a CDN is ever put in front of
+it**.
+
+A slug rather than an index because `loadActiveBlocks` filters the channel list to
+channels with an active block and re-indexes it, so a stored index points at a different
+channel whenever scheduling changes. `/api/settings` applies that same filter when there
+is no cookie, so the server and the client agree on which channel a first-time visitor
+lands on.
+
+## Embed Image
+
+The link-preview image (`og:image` / `twitter:image`) is set at `/admin/settings` and
+stored in `.data/banners.json` under `embed`. Absent means the built-in `/logo.png`.
+
+Restricted to an **uploaded** file — no external URLs. Not for SSRF (nothing fetches it
+server-side) but because iMessage and WhatsApp generate previews on the sending or
+receiving device, so a third-party host would collect real end-user IPs keyed to
+"somebody shared this site in a private chat", and could swap the image under every
+already-shared link.
+
+Uploads are downscaled in the browser to fit 1200x630 before being sent: a phone photo
+pick is ~4032x3024 and ~3MB, which trips both the 2 MB body cap and the 4000px dimension
+cap. Chat clients cache previews aggressively; a new upload gets a new content-hash URL,
+so the preview refreshes.
 
 ## Auth and Access
 
