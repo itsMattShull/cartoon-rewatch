@@ -48,9 +48,16 @@ export default defineEventHandler(async (event) => {
   const activeColor =
     (typeof cookieSlug === 'string' && theme.colors[cookieSlug]) || theme.default
 
+  // theme is stripped from the public banners payload: it holds the scheduled-colour
+  // rules, whose labels and dates are admin-authored and have no business being in the
+  // SSR'd HTML of every anonymous page load. What the front page needs is the resolved
+  // answer, which is the `theme` key below. The admin form reads the raw config from
+  // /api/banners/config instead.
+  const { theme: _rawTheme, ...publicBanners } = withResolvedTagline(banners)
+
   return {
     ...settings,
-    banners: withResolvedTagline(banners),
+    banners: publicBanners,
     theme: { ...theme, activeColor }
   }
 })

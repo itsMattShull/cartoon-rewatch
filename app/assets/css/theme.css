@@ -132,6 +132,11 @@
   --cr-font-mono: ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
 
   font-synthesis-weight: none;
+
+  /* Without this the UA paints its own controls — date and colour pickers, select
+     menus, scrollbars, form field chrome — in light mode on a near-black page. It only
+     started mattering once the admin pages grew date and colour inputs. */
+  color-scheme: dark;
 }
 
 /* Users in forced-colors or high-contrast modes get the shipped, hand-audited blue
