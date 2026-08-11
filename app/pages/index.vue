@@ -2876,31 +2876,31 @@ onBeforeUnmount(() => {
 .page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
 .page.theater .announcement:not(:hover):not(:has(:focus-visible)),
 .page.theater .controls:not(:hover):not(:has(:focus-visible)) {
-  --cr-surface-3: #0a0f15;
-  --cr-surface-4: #080d13;
-  --cr-surface-panel-bot: #0a141d;
-  --cr-surface-titlebar-mid: #0a121a;
-  --cr-surface-titlebar-end: #071722;
-  --cr-surface-btn-top: #0a1f2e;
-  --cr-surface-btn-bot: #07141e;
+  --cr-surface-3: var(--cr-ch-theater-surface-3, #0a0f15);
+  --cr-surface-4: var(--cr-ch-theater-surface-4, #080d13);
+  --cr-surface-panel-bot: var(--cr-ch-theater-surface-panel-bot, #0a141d);
+  --cr-surface-titlebar-mid: var(--cr-ch-theater-surface-titlebar-mid, #0a121a);
+  --cr-surface-titlebar-end: var(--cr-ch-theater-surface-titlebar-end, #071722);
+  --cr-surface-btn-top: var(--cr-ch-theater-surface-btn-top, #0a1f2e);
+  --cr-surface-btn-bot: var(--cr-ch-theater-surface-btn-bot, #07141e);
 
-  --cr-text: #b9cdda;
-  --cr-text-bright: #bcd4e0;
-  --cr-text-ctrl: #9dc0d2;
-  --cr-text-lcd: #96b9cb;
-  --cr-text-muted-2: #87a9bb;
-  --cr-text-muted-4: #7ba0b3;
-  --cr-text-muted-5: #749cb0;
-  --cr-text-dim-1: #6f95a8;
-  --cr-text-dim-2: #6d93a6;
-  --cr-accent: #7fb4cd;
+  --cr-text: var(--cr-ch-theater-text, #b9cdda);
+  --cr-text-bright: var(--cr-ch-theater-text-bright, #bcd4e0);
+  --cr-text-ctrl: var(--cr-ch-theater-text-ctrl, #9dc0d2);
+  --cr-text-lcd: var(--cr-ch-theater-text-lcd, #96b9cb);
+  --cr-text-muted-2: var(--cr-ch-theater-text-muted-2, #87a9bb);
+  --cr-text-muted-4: var(--cr-ch-theater-text-muted-4, #7ba0b3);
+  --cr-text-muted-5: var(--cr-ch-theater-text-muted-5, #749cb0);
+  --cr-text-dim-1: var(--cr-ch-theater-text-dim-1, #6f95a8);
+  --cr-text-dim-2: var(--cr-ch-theater-text-dim-2, #6d93a6);
+  --cr-accent: var(--cr-ch-theater-accent, #7fb4cd);
 
-  --cr-line-2: #2a6d95;
-  --cr-line-3: #2f7ba6;
-  --cr-line-strong: #3789b5;
-  --cr-brand-400: #1f9ed6;
-  --cr-slider-track-0: #0a6d96;
-  --cr-slider-track-1: #b5d2e0;
+  --cr-line-2: var(--cr-ch-theater-line-2, #2a6d95);
+  --cr-line-3: var(--cr-ch-theater-line-3, #2f7ba6);
+  --cr-line-strong: var(--cr-ch-theater-line-strong, #3789b5);
+  --cr-brand-400: var(--cr-ch-theater-brand-400, #1f9ed6);
+  --cr-slider-track-0: var(--cr-ch-theater-slider-track-0, #0a6d96);
+  --cr-slider-track-1: var(--cr-ch-theater-slider-track-1, #b5d2e0);
 }
 
 /* Ads are images, so the token remap does not reach them. This is the one place
@@ -2913,11 +2913,18 @@ onBeforeUnmount(() => {
 /* Theater is layout-only for anyone who has asked for maximum contrast or reduced
    transparency. The widened picture is free; only the recolouring is dropped.
 
-   The values below are the :root values from theme.css restated, not `initial` —
-   `initial` on a custom property means the guaranteed-invalid value, so every
-   var() referencing it would fail rather than fall back to the theme. If a browser
-   does not understand these media features the block simply never applies, which
-   is the safe direction: the dim it would have undone is itself AA-conformant. */
+   The values below are the :root values restated, not `initial` — `initial` on a
+   custom property means the guaranteed-invalid value, so every var() referencing it
+   would fail rather than fall back to the theme. If a browser does not understand
+   these media features the block simply never applies, which is the safe direction:
+   the dim it would have undone is itself AA-conformant.
+
+   They restate the CHANNEL palette (`var(--cr-ch-x, <shipped literal>)`), not the
+   shipped blue, so that cancelling the dim restores whatever :root currently holds.
+   Restating the blue literals here would be wrong for a viewer who has asked only for
+   reduced transparency: theme.css resets :root to the audited blue for forced-colors
+   and prefers-contrast, but deliberately not for that one, so this block would have
+   painted blue chrome onto an otherwise recoloured page. */
 @media (forced-colors: active),
   (prefers-contrast: more),
   (prefers-contrast: custom),
@@ -2925,31 +2932,31 @@ onBeforeUnmount(() => {
   .page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
   .page.theater .announcement:not(:hover):not(:has(:focus-visible)),
   .page.theater .controls:not(:hover):not(:has(:focus-visible)) {
-    --cr-surface-3: #151c25;
-    --cr-surface-4: #18212b;
-    --cr-surface-panel-bot: #142739;
-    --cr-surface-titlebar-mid: #1c2d3e;
-    --cr-surface-titlebar-end: #0d324c;
-    --cr-surface-btn-top: #0e334d;
-    --cr-surface-btn-bot: #0c2336;
+    --cr-surface-3: var(--cr-ch-surface-3, #151c25);
+    --cr-surface-4: var(--cr-ch-surface-4, #18212b);
+    --cr-surface-panel-bot: var(--cr-ch-surface-panel-bot, #142739);
+    --cr-surface-titlebar-mid: var(--cr-ch-surface-titlebar-mid, #1c2d3e);
+    --cr-surface-titlebar-end: var(--cr-ch-surface-titlebar-end, #0d324c);
+    --cr-surface-btn-top: var(--cr-ch-surface-btn-top, #0e334d);
+    --cr-surface-btn-bot: var(--cr-ch-surface-btn-bot, #0c2336);
 
-    --cr-text: #e4f1f9;
-    --cr-text-bright: #e2f5fe;
-    --cr-text-ctrl: #c0e7fa;
-    --cr-text-lcd: #bce3f6;
-    --cr-text-muted-2: #a3cbe0;
-    --cr-text-muted-4: #89bdd6;
-    --cr-text-muted-5: #80bbd6;
-    --cr-text-dim-1: #77b0cc;
-    --cr-text-dim-2: #75afca;
-    --cr-accent: #9fe0ff;
+    --cr-text: var(--cr-ch-text, #e4f1f9);
+    --cr-text-bright: var(--cr-ch-text-bright, #e2f5fe);
+    --cr-text-ctrl: var(--cr-ch-text-ctrl, #c0e7fa);
+    --cr-text-lcd: var(--cr-ch-text-lcd, #bce3f6);
+    --cr-text-muted-2: var(--cr-ch-text-muted-2, #a3cbe0);
+    --cr-text-muted-4: var(--cr-ch-text-muted-4, #89bdd6);
+    --cr-text-muted-5: var(--cr-ch-text-muted-5, #80bbd6);
+    --cr-text-dim-1: var(--cr-ch-text-dim-1, #77b0cc);
+    --cr-text-dim-2: var(--cr-ch-text-dim-2, #75afca);
+    --cr-accent: var(--cr-ch-accent, #9fe0ff);
 
-    --cr-line-2: #25709e;
-    --cr-line-3: #4096c6;
-    --cr-line-strong: #359acc;
-    --cr-brand-400: #0ba0df;
-    --cr-slider-track-0: #016794;
-    --cr-slider-track-1: #cbe9ff;
+    --cr-line-2: var(--cr-ch-line-2, #25709e);
+    --cr-line-3: var(--cr-ch-line-3, #4096c6);
+    --cr-line-strong: var(--cr-ch-line-strong, #359acc);
+    --cr-brand-400: var(--cr-ch-brand-400, #0ba0df);
+    --cr-slider-track-0: var(--cr-ch-slider-track-0, #016794);
+    --cr-slider-track-1: var(--cr-ch-slider-track-1, #cbe9ff);
   }
 
   .page.theater .ad-slot .ad-banner {
