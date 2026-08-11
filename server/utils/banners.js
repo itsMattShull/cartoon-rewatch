@@ -2,6 +2,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { safeImageUrl, safeLinkUrl } from '#shared/url-safety.js'
+import { REFERENCE_BRAND } from '#shared/palette.js'
+import { normalizeTheme } from '#shared/theme-config.js'
 
 // Runtime state lives in .data/, never under assets/ or public/:
 //   - assets/ is a build-time import root (index.vue statically imports channel JSON)
@@ -28,6 +30,13 @@ export const DEFAULT_TAGLINE = 'Grab cereal and enjoy.'
 
 // Uploaded files are content-addressed, so the name is a pure function of the bytes.
 export const UPLOAD_FILENAME = /^[0-9a-f]{32}\.(png|jpg|gif|webp)$/
+export const UPLOAD_URL_PREFIX = '/api/banner-image/'
+
+// An upload is not referenced by anything until a save assigns it, so a save that lands
+// between an upload and its assignment would otherwise collect the fresh file. Content
+// hashes make the name unrecoverable without the original bytes, so the loss is
+// permanent for the admin who just picked the image.
+export const UPLOAD_GRACE_MS = 15 * 60 * 1000
 
 export const IMAGE_MIME = {
   png: 'image/png',
@@ -47,6 +56,15 @@ const DEFAULTS = {
   // matters because every existing banners.json predates this key, and collapsing absent
   // to empty would blank the header on deploy.
   tagline: { text: null },
+  // Per-channel colour schemes. Lives here rather than in its own file so that colours,
+  // banners and the embed image are one config, one lock, one atomic write and one save
+  // button — a second store would mean "Save Colours" could succeed while "Save Banners"
+  // failed, against a shared upload GC that only knows about one of them.
+  theme: { default: REFERENCE_BRAND, channels: {}, overrides: [] },
+  // The link-preview image. `null` means "never configured" and resolves to the
+  // /logo.png that was hardcoded in index.vue's useHead, so an untouched deployment
+  // unfurls exactly as it did before.
+  embed: { imageUrl: '', width: 0, height: 0, alt: '' },
   // Seeded with the banner that was previously hardcoded in index.vue so the
   // front page looks identical before an admin touches anything.
   ads: [
@@ -129,6 +147,29 @@ function normalizeAd(raw, index) {
   }
 }
 
+// The link-preview image. Restricted to an uploaded, same-origin, content-addressed
+// file rather than accepting an arbitrary https URL like the ad banners do.
+//
+// The reason is not SSRF — nothing fetches this server-side. It is that iMessage and
+// WhatsApp build link previews ON THE SENDING OR RECEIVING DEVICE, so a third-party
+// image host would receive real end-user IP addresses keyed to "somebody just shared
+// this site in a private chat". A remote host can also swap the image at any time and
+// change what every existing shared link looks like. Neither is true of a hash-named
+// file we serve ourselves.
+function normalizeEmbed(raw) {
+  const imageUrl = typeof raw?.imageUrl === 'string' ? raw.imageUrl.trim() : ''
+  const isUpload =
+    imageUrl.startsWith(UPLOAD_URL_PREFIX) &&
+    UPLOAD_FILENAME.test(imageUrl.slice(UPLOAD_URL_PREFIX.length))
+  if (!isUpload) return { imageUrl: '', width: 0, height: 0, alt: '' }
+  return {
+    imageUrl,
+    width: toDimension(raw?.width),
+    height: toDimension(raw?.height),
+    alt: cleanText(raw?.alt, MAX_ALT_CHARS)
+  }
+}
+
 /**
  * Coerces arbitrary input into a valid banner config. Never throws: a corrupt or
  * partially-written file degrades to "no banners", because the front page awaits this
@@ -164,6 +205,8 @@ export function normalizeBanners(raw) {
       text: stripText,
       linkUrl: stripLink
     },
+    theme: normalizeTheme(raw?.theme),
+    embed: normalizeEmbed(raw?.embed),
     ads
   }
 }
@@ -238,23 +281,56 @@ export async function writeBanners(banners) {
 }
 
 /**
+ * Every uploaded file the config refers to, found by walking the whole normalised object
+ * for /api/banner-image/ URLs.
+ *
+ * Structural rather than a field-by-field list, so a new image-bearing field is covered
+ * by construction. The previous version walked banners.ads only, which meant any other
+ * feature storing an upload would have had its file silently deleted by the next
+ * unrelated banner save — and made the GC's implementation an unwritten constraint on
+ * the data model.
+ */
+export function collectReferencedUploads(value, found = new Set()) {
+  if (typeof value === 'string') {
+    if (value.startsWith(UPLOAD_URL_PREFIX)) {
+      const name = value.slice(UPLOAD_URL_PREFIX.length)
+      if (UPLOAD_FILENAME.test(name)) found.add(name)
+    }
+    return found
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectReferencedUploads(entry, found)
+    return found
+  }
+  if (value && typeof value === 'object') {
+    for (const entry of Object.values(value)) collectReferencedUploads(entry, found)
+  }
+  return found
+}
+
+/**
  * Removes uploaded files no longer referenced by the saved config, so replacing a
  * banner repeatedly can't grow the data dir without bound.
  */
 export async function pruneOrphanUploads(banners) {
   const dir = path.resolve(process.cwd(), UPLOAD_DIR)
-  const referenced = new Set(
-    (banners?.ads || [])
-      .map((ad) => ad.imageUrl)
-      .filter((url) => typeof url === 'string' && url.startsWith('/api/banner-image/'))
-      .map((url) => url.slice('/api/banner-image/'.length))
-  )
+  const referenced = collectReferencedUploads(banners)
+  const cutoff = Date.now() - UPLOAD_GRACE_MS
   try {
     const entries = await fs.readdir(dir)
     await Promise.all(
       entries
         .filter((name) => UPLOAD_FILENAME.test(name) && !referenced.has(name))
-        .map((name) => fs.unlink(path.join(dir, name)).catch(() => {}))
+        .map(async (name) => {
+          const filePath = path.join(dir, name)
+          try {
+            const stat = await fs.stat(filePath)
+            if (stat.mtimeMs > cutoff) return
+            await fs.unlink(filePath)
+          } catch {
+            // Raced with another delete, or vanished. Either way there is nothing to do.
+          }
+        })
     )
   } catch {
     // Directory may not exist yet.
