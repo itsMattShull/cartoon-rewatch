@@ -298,6 +298,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { safeImageUrl, safeLinkUrl } from '#shared/url-safety.js'
+import { buildPaletteStyle, derivePalette } from '#shared/palette.js'
 import {
   compareOccurrences,
   expandRecurringRules,
@@ -493,7 +494,7 @@ const { data: authData, refresh: refreshAuth } = await useFetch('/api/auth/me')
 // Banners ride along in this existing SSR fetch, so they cost no extra round trip and
 // are present in the first paint. Do not move them to $fetch in onMounted — that
 // reintroduces a post-hydration request and makes every banner shift the layout.
-const { data: scheduleSettings } = await useFetch('/api/settings')
+const { data: scheduleSettings, refresh: refreshSettings } = await useFetch('/api/settings')
 
 const banners = computed(() => scheduleSettings.value?.banners ?? null)
 const announcement = computed(
@@ -543,6 +544,55 @@ const theaterMode = computed({
   set: (value) => {
     theaterCookie.value = value ? '1' : '0'
   }
+})
+
+// The channel whose colour scheme is showing. A cookie for the same reason as the two
+// above: the palette changes the colour of the entire page, and localStorage cannot be
+// read during SSR, so every returning viewer would get a flash of the previous channel's
+// colours and a full-page recolour on load.
+//
+// This makes / vary on a THIRD cookie — see the note on theaterCookie above; / must stay
+// uncacheable if a CDN is ever put in front of it.
+//
+// A slug, not the index the old localStorage key held. loadActiveBlocks filters the list
+// to channels that currently have an active block and then re-indexes it, so index 2
+// means a different channel depending on what is scheduled. `decode: rawCookie` for the
+// same destr reason as the others, and it matters here beyond digits: channel slugs are
+// admin-created with no reserved-word check, so a channel called `true`, `null` or `2000`
+// would read back as a non-string and throw on lookup.
+const channelCookie = useCookie('crt80_channel', {
+  maxAge: 60 * 60 * 24 * 180,
+  sameSite: 'lax',
+  path: '/',
+  decode: rawCookie
+})
+
+// Seeded from the cookie on BOTH sides so the server and the first client render agree.
+// Deliberately not driven off activeChannelSlug, which is '' until loadActiveBlocks
+// resolves after mount and would therefore mismatch SSR immediately.
+const paletteSlug = ref(typeof channelCookie.value === 'string' ? channelCookie.value : '')
+
+const brandColor = computed(() => {
+  const theme = scheduleSettings.value?.theme
+  if (!theme) return ''
+  // activeColor, not default, is the fallback: on a first visit there is no cookie, so
+  // the server resolved the colour of the channel this viewer is about to land on —
+  // the first one with an active block, which is the same rule restoreSavedChannel
+  // applies on the client. Falling back to the site default here instead would render
+  // the wrong palette on the server and repaint after hydration.
+  return theme.colors?.[paletteSlug.value] || theme.activeColor || theme.default || ''
+})
+
+// Emitted as --cr-ch-* inputs in an inline style attribute on <html>, which theme.css's
+// var() fallbacks consume. See buildPaletteStyle for why the indirection.
+const paletteStyle = computed(() => buildPaletteStyle(brandColor.value))
+
+// What the mobile browser's address bar butts against: the top of .page's radial
+// gradient normally, and the flat root surface in theater mode. Theater is a cookie, so
+// this is already correct during SSR.
+const themeColor = computed(() => {
+  const palette = derivePalette(brandColor.value).base
+  return theaterMode.value ? palette['--cr-surface-root'] : palette['--cr-surface-page-top']
 })
 
 function announcementKey(text) {
@@ -638,8 +688,11 @@ let viewerHelloTimer = null
 // blocks this client already has.
 let blockPayloadCache = {}
 let scheduleReloadTimer = null
+let themeRevalidateTimer = null
 const pendingChannelSlug = ref('')
-const storageKey = 'crt80:lastChannel'
+// Superseded by the crt80_channel cookie. Read once on mount to migrate anyone whose
+// preference is still only in localStorage, then removed.
+const legacyStorageKey = 'crt80:lastChannel'
 const viewerStorageKey = 'crt80:viewerId'
 
 const activeChannel = computed(() => channels.value[activeChannelIndex.value])
@@ -710,20 +763,52 @@ const guideStart = computed(() => getZoneMinuteStart(now.value, scheduleTimeZone
 
 const requestUrl = useRequestURL()
 const canonicalUrl = computed(() => requestUrl.origin + requestUrl.pathname)
-const socialImageUrl = computed(() => `${requestUrl.origin}/logo.png`)
-const socialImageWidth = 1204
-const socialImageHeight = 623
+// The link-preview image. Falls back to the logo that was hardcoded here, at the
+// dimensions it actually is, so an untouched deployment unfurls exactly as before.
+const DEFAULT_SOCIAL_IMAGE = { path: '/logo.png', width: 1204, height: 623, type: 'image/png', alt: 'Cartoon ReWatch logo' }
+
+const EMBED_MIME = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
+
+const socialImage = computed(() => {
+  const embed = banners.value?.embed
+  // normalizeEmbed only ever stores an uploaded /api/banner-image/<hash>.<ext> path, so
+  // the extension is one of four known values rather than something guessed off a URL.
+  const match = /^\/api\/banner-image\/[0-9a-f]{32}\.(png|jpg|gif|webp)$/.exec(embed?.imageUrl || '')
+  if (!match) return DEFAULT_SOCIAL_IMAGE
+  return {
+    path: embed.imageUrl,
+    // probeImage legitimately returns 0x0 for a JPEG whose dimensions it could not find.
+    // Facebook rejects an image advertised as 0 wide, so the tags are omitted below
+    // rather than sent as zeroes.
+    width: embed.width || 0,
+    height: embed.height || 0,
+    type: EMBED_MIME[match[1]],
+    alt: embed.alt || DEFAULT_SOCIAL_IMAGE.alt
+  }
+})
+const socialImageUrl = computed(() => `${requestUrl.origin}${socialImage.value.path}`)
+
 const pageTitle = 'Cartoon ReWatch — Live Cartoon Channel Player'
 const pageDescription =
   'Stream a nostalgic, always-on cartoon channel with classic blocks from Toonami, Adult Swim, Saturday Mornings, and more.'
 
 useHead({
   title: pageTitle,
-  htmlAttrs: { lang: 'en' },
+  htmlAttrs: {
+    lang: 'en',
+    // The per-channel palette. Passed as the computed itself, NOT paletteStyle.value:
+    // every other entry in this call unwraps eagerly because those values are constant,
+    // but this one has to stay reactive or the page never recolours on a channel flip.
+    style: paletteStyle
+  },
   meta: [
     { name: 'description', content: pageDescription },
     { name: 'robots', content: 'index,follow' },
-    { name: 'theme-color', content: 'var(--cr-surface-4)' },
+    // Was `var(--cr-surface-4)`, which is not valid in a meta attribute and did nothing.
+    // Now the real colour, tracking the channel — and --cr-surface-page-top rather than
+    // -4, because the top of .page's gradient is what the mobile address bar butts
+    // against. Theater mode paints .page flat --cr-surface-root instead.
+    { name: 'theme-color', content: themeColor },
     { property: 'og:title', content: pageTitle },
     { property: 'og:description', content: pageDescription },
     { property: 'og:type', content: 'website' },
@@ -732,14 +817,12 @@ useHead({
     { name: 'twitter:card', content: 'summary_large_image' },
     { name: 'twitter:title', content: pageTitle },
     { name: 'twitter:description', content: pageDescription },
-    { property: 'og:image', content: socialImageUrl.value },
-    { property: 'og:image:secure_url', content: socialImageUrl.value },
-    { property: 'og:image:width', content: String(socialImageWidth) },
-    { property: 'og:image:height', content: String(socialImageHeight) },
-    { property: 'og:image:type', content: 'image/png' },
-    { property: 'og:image:alt', content: 'Cartoon ReWatch logo' },
-    { name: 'twitter:image', content: socialImageUrl.value },
-    { name: 'twitter:image:alt', content: 'Cartoon ReWatch logo' }
+    { property: 'og:image', content: socialImageUrl },
+    { property: 'og:image:secure_url', content: socialImageUrl },
+    { property: 'og:image:type', content: () => socialImage.value.type },
+    { property: 'og:image:alt', content: () => socialImage.value.alt },
+    { name: 'twitter:image', content: socialImageUrl },
+    { name: 'twitter:image:alt', content: () => socialImage.value.alt }
   ],
   link: [{ rel: 'canonical', href: canonicalUrl.value }],
   script: [
@@ -755,6 +838,18 @@ useHead({
     }
   ]
 })
+
+// Split out because unhead drops a meta tag whose content is '' but happily emits
+// `content="0"`, and an og:image:width of 0 makes Facebook reject the image outright.
+useHead(() => ({
+  meta: socialImage.value.width && socialImage.value.height
+    ? [
+        { property: 'og:image:width', content: String(socialImage.value.width) },
+        { property: 'og:image:height', content: String(socialImage.value.height) }
+      ]
+    : []
+}))
+
 const guideHeaderSegments = computed(() => {
   const startSeconds = getSecondsSinceWeekStartInZone(guideStart.value, scheduleTimeZone, weekStartOffset.value)
   const minuteOfHour = Math.floor((startSeconds % 3600) / 60)
@@ -1236,10 +1331,57 @@ function handleAuthRecheck() {
 function setChannel(index) {
   if (!channels.value.length) return
   activeChannelIndex.value = index
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(storageKey, String(index))
+  const slug = channels.value[index]?.slug || ''
+  if (slug) {
+    channelCookie.value = slug
+    // Repaints the page in the new channel's colours. One attribute write; the palette
+    // itself is memoised per hex, so flipping back and forth costs a Map lookup.
+    paletteSlug.value = slug
   }
   syncToSchedule(true)
+}
+
+/**
+ * Restores the viewer's last channel. Must run AFTER loadActiveBlocks().
+ *
+ * The version this replaces ran at the top of onMounted and compared the saved index
+ * against `channels.value.length` — but `channels` is `ref([])` until loadActiveBlocks
+ * resolves further down the same function, so the guard was `saved < 0` and the restore
+ * has never once fired. Anyone who switched channels got dropped back to channel 1 on
+ * every load.
+ *
+ * Resolving by slug rather than index also fixes the reason an index was never right:
+ * loadActiveBlocks filters to channels with an active block and re-indexes, so a stored
+ * index silently points at a different channel whenever scheduling changes.
+ */
+function restoreSavedChannel() {
+  if (typeof window === 'undefined' || !channels.value.length) return
+
+  let slug = typeof channelCookie.value === 'string' ? channelCookie.value : ''
+
+  if (!slug) {
+    const legacy = Number.parseInt(window.localStorage.getItem(legacyStorageKey) || '', 10)
+    if (Number.isFinite(legacy) && legacy >= 0 && legacy < channels.value.length) {
+      slug = channels.value[legacy]?.slug || ''
+    }
+  }
+  window.localStorage.removeItem(legacyStorageKey)
+
+  const index = slug ? channels.value.findIndex((channel) => channel.slug === slug) : -1
+
+  // No stored preference, or it names a channel that has since been removed or lost its
+  // active block: stay on whichever channel is showing, but adopt ITS colour. Without
+  // this a first-time visitor watches channel 1 under the site default palette rather
+  // than that channel's own, until they happen to switch away and back.
+  if (index < 0) {
+    const current = channels.value[activeChannelIndex.value]?.slug || ''
+    if (current) paletteSlug.value = current
+    return
+  }
+
+  activeChannelIndex.value = index
+  channelCookie.value = slug
+  paletteSlug.value = slug
 }
 
 function nextChannel() {
@@ -1740,6 +1882,30 @@ async function loadActiveBlocks({ syncPlayer = false } = {}) {
   }
 }
 
+// A scheduled colour starts and ends on a civil-date boundary, so there is exactly one
+// moment a left-open tab needs to hear about: the next local midnight, which the server
+// already computed as theme.revalidateAt. One timer, not a poll.
+//
+// Skipped entirely under prefers-reduced-motion. Recolouring the whole page under
+// someone who is sitting reading it, with no interaction of their own, is a large
+// involuntary visual change — exactly what that preference is asking us not to do. They
+// get the palette the page loaded with until they reload.
+function scheduleThemeRevalidate() {
+  if (typeof window === 'undefined') return
+  window.clearTimeout(themeRevalidateTimer)
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+
+  const at = Number(scheduleSettings.value?.theme?.revalidateAt)
+  if (!Number.isFinite(at)) return
+  // setTimeout clamps above ~24.8 days and fires immediately on a negative delay; both
+  // are reachable with a skewed clock, so bound the wait and re-arm rather than trust it.
+  const delay = Math.min(Math.max(at - Date.now(), 60_000), 6 * 3600_000)
+  themeRevalidateTimer = window.setTimeout(async () => {
+    await refreshSettings()
+    scheduleThemeRevalidate()
+  }, delay)
+}
+
 // Without this the only way out of theater mode is the Controls tab, which is not the
 // default tab — so a viewer who toggles it on while reading chat has no visible exit.
 function handleTheaterKeydown(event) {
@@ -1749,12 +1915,6 @@ function handleTheaterKeydown(event) {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleTheaterKeydown)
-  if (typeof window !== 'undefined') {
-    const saved = Number.parseInt(window.localStorage.getItem(storageKey) || '', 10)
-    if (Number.isFinite(saved) && saved >= 0 && saved < channels.value.length) {
-      activeChannelIndex.value = saved
-    }
-  }
   viewerId.value = getOrCreateViewerId()
   pageSessionId.value = getOrCreatePageSessionId()
   hasLoadedChannel.value = true
@@ -1764,6 +1924,8 @@ onMounted(async () => {
   }, 1000)
 
   await loadActiveBlocks()
+  restoreSavedChannel()
+  scheduleThemeRevalidate()
   viewerShouldReconnect = true
   connectViewerSocket()
   syncToSchedule(true)
@@ -1788,6 +1950,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleTheaterKeydown)
   if (clockInterval) window.clearInterval(clockInterval)
   if (syncInterval) window.clearInterval(syncInterval)
+  if (themeRevalidateTimer) window.clearTimeout(themeRevalidateTimer)
   if (resizeObserver) resizeObserver.disconnect()
   if (player && player.destroy) player.destroy()
   if (dailymotionPlayer && typeof dailymotionPlayer.destroy === 'function') {
@@ -1851,7 +2014,7 @@ onBeforeUnmount(() => {
   font-size: 27px;
   letter-spacing: 0.09em;
   color: var(--cr-accent);
-  text-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--cr-accent) 40%, transparent);
 }
 
 .brand-sub {
@@ -2003,7 +2166,7 @@ onBeforeUnmount(() => {
   font-size: 28px;
   letter-spacing: 0.1em;
   color: var(--cr-text-muted-3);
-  text-shadow: 0 0 12px rgba(164, 227, 255, 0.4);
+  text-shadow: 0 0 12px var(--cr-accent-glow);
   background: radial-gradient(circle at center, var(--cr-surface-screen-off) 0%, var(--cr-surface-void) 80%);
 }
 
@@ -2014,7 +2177,7 @@ onBeforeUnmount(() => {
   padding: 10px 16px;
   border-radius: 999px;
   border: 1px solid var(--cr-text-ctrl);
-  background: rgba(16, 26, 37, 0.85);
+  background: var(--cr-scrim-overlay);
   color: var(--cr-text-ctrl);
   font-family: var(--cr-font);
   font-size: 15px;
@@ -2245,8 +2408,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid rgba(159, 224, 255, 0.8);
-  background: linear-gradient(180deg, rgba(16, 42, 62, 0.95), rgba(14, 29, 42, 0.95));
+  border: 1px solid var(--cr-accent-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--cr-chip-grad-0) 95%, transparent), color-mix(in srgb, var(--cr-chip-grad-1) 95%, transparent));
   color: var(--cr-accent);
   font-size: 13px;
   text-transform: none;
@@ -2257,13 +2420,13 @@ onBeforeUnmount(() => {
 }
 
 .channel-name a[data-patreon-widget-type]:hover {
-  border-color: rgba(159, 224, 255, 1);
+  border-color: var(--cr-accent);
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
   transform: translateY(-1px);
 }
 
 .channel-name a[data-patreon-widget-type]:focus-visible {
-  outline: 2px solid rgba(159, 224, 255, 0.9);
+  outline: 2px solid color-mix(in srgb, var(--cr-accent) 90%, transparent);
   outline-offset: 2px;
 }
 
@@ -2422,7 +2585,7 @@ onBeforeUnmount(() => {
 
 .tab-button {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.2);
   color: var(--cr-text-ctrl);
   padding: 8px 10px;
@@ -2436,13 +2599,13 @@ onBeforeUnmount(() => {
 .tab-button.active {
   border-color: var(--cr-accent);
   color: var(--cr-accent);
-  background: rgba(159, 224, 255, 0.12);
+  background: var(--cr-accent-soft-2);
 }
 
 .panel-section {
   display: grid;
   gap: 12px;
-  border: 1px dashed rgba(37, 112, 158, 0.6);
+  border: 1px dashed color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.2);
   padding: 12px;
@@ -2514,7 +2677,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.2);
   font-size: 12px;
   color: var(--cr-text-muted-4);
@@ -2547,7 +2710,7 @@ onBeforeUnmount(() => {
 
 .chat-input input {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
   background: rgba(0, 0, 0, 0.3);
   color: var(--cr-text);
   padding: 8px 10px;
@@ -2557,8 +2720,8 @@ onBeforeUnmount(() => {
 
 .chat-input button {
   border-radius: 10px;
-  border: 1px solid rgba(37, 112, 158, 0.6);
-  background: rgba(159, 224, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--cr-line-2) 60%, transparent);
+  background: var(--cr-accent-soft-2);
   color: var(--cr-accent);
   padding: 8px 14px;
   font-family: var(--cr-font);
@@ -2609,7 +2772,7 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
   padding: 12px;
   border-radius: 12px;
-  border: 1px solid rgba(53, 154, 204, 0.45);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 45%, transparent);
   background: rgba(0, 0, 0, 0.3);
 }
 
@@ -2698,7 +2861,7 @@ onBeforeUnmount(() => {
 .toggle.active,
 .channel-button.active {
   border-color: var(--cr-accent);
-  box-shadow: 0 0 12px rgba(159, 224, 255, 0.4);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cr-accent) 40%, transparent);
 }
 
 .guide {
@@ -2728,7 +2891,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   background: rgba(0, 0, 0, 0.35);
   border-radius: 8px;
-  border: 1px solid rgba(53, 154, 204, 0.4);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 40%, transparent);
   display: flex;
   align-items: center;
 }
@@ -2752,7 +2915,7 @@ onBeforeUnmount(() => {
 .guide-hour {
   font-variant-numeric: tabular-nums;
   padding: 6px 8px;
-  border: 1px solid rgba(53, 154, 204, 0.35);
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 35%, transparent);
   border-right: none;
   color: var(--cr-accent);
   background: rgba(0, 0, 0, 0.4);
@@ -2763,7 +2926,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-hour:last-child {
-  border-right: 1px solid rgba(53, 154, 204, 0.35);
+  border-right: 1px solid color-mix(in srgb, var(--cr-line-strong) 35%, transparent);
 }
 
 .guide-row {
@@ -2775,8 +2938,8 @@ onBeforeUnmount(() => {
 
 .guide-block {
   height: 100%;
-  background: linear-gradient(135deg, rgba(16, 44, 66, 0.95), rgba(14, 27, 39, 0.95));
-  border: 1px solid rgba(53, 154, 204, 0.5);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--cr-guide-block-0) 95%, transparent), color-mix(in srgb, var(--cr-guide-block-1) 95%, transparent));
+  border: 1px solid color-mix(in srgb, var(--cr-line-strong) 50%, transparent);
   border-right: none;
   padding: 8px 10px;
   display: flex;
@@ -2786,7 +2949,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-block:last-child {
-  border-right: 1px solid rgba(53, 154, 204, 0.5);
+  border-right: 1px solid color-mix(in srgb, var(--cr-line-strong) 50%, transparent);
 }
 
 .guide-title {
@@ -2876,31 +3039,31 @@ onBeforeUnmount(() => {
 .page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
 .page.theater .announcement:not(:hover):not(:has(:focus-visible)),
 .page.theater .controls:not(:hover):not(:has(:focus-visible)) {
-  --cr-surface-3: #0a0f15;
-  --cr-surface-4: #080d13;
-  --cr-surface-panel-bot: #0a141d;
-  --cr-surface-titlebar-mid: #0a121a;
-  --cr-surface-titlebar-end: #071722;
-  --cr-surface-btn-top: #0a1f2e;
-  --cr-surface-btn-bot: #07141e;
+  --cr-surface-3: var(--cr-ch-theater-surface-3, #0a0f15);
+  --cr-surface-4: var(--cr-ch-theater-surface-4, #080d13);
+  --cr-surface-panel-bot: var(--cr-ch-theater-surface-panel-bot, #0a141d);
+  --cr-surface-titlebar-mid: var(--cr-ch-theater-surface-titlebar-mid, #0a121a);
+  --cr-surface-titlebar-end: var(--cr-ch-theater-surface-titlebar-end, #071722);
+  --cr-surface-btn-top: var(--cr-ch-theater-surface-btn-top, #0a1f2e);
+  --cr-surface-btn-bot: var(--cr-ch-theater-surface-btn-bot, #07141e);
 
-  --cr-text: #b9cdda;
-  --cr-text-bright: #bcd4e0;
-  --cr-text-ctrl: #9dc0d2;
-  --cr-text-lcd: #96b9cb;
-  --cr-text-muted-2: #87a9bb;
-  --cr-text-muted-4: #7ba0b3;
-  --cr-text-muted-5: #749cb0;
-  --cr-text-dim-1: #6f95a8;
-  --cr-text-dim-2: #6d93a6;
-  --cr-accent: #7fb4cd;
+  --cr-text: var(--cr-ch-theater-text, #b9cdda);
+  --cr-text-bright: var(--cr-ch-theater-text-bright, #bcd4e0);
+  --cr-text-ctrl: var(--cr-ch-theater-text-ctrl, #9dc0d2);
+  --cr-text-lcd: var(--cr-ch-theater-text-lcd, #96b9cb);
+  --cr-text-muted-2: var(--cr-ch-theater-text-muted-2, #87a9bb);
+  --cr-text-muted-4: var(--cr-ch-theater-text-muted-4, #7ba0b3);
+  --cr-text-muted-5: var(--cr-ch-theater-text-muted-5, #749cb0);
+  --cr-text-dim-1: var(--cr-ch-theater-text-dim-1, #6f95a8);
+  --cr-text-dim-2: var(--cr-ch-theater-text-dim-2, #6d93a6);
+  --cr-accent: var(--cr-ch-theater-accent, #7fb4cd);
 
-  --cr-line-2: #2a6d95;
-  --cr-line-3: #2f7ba6;
-  --cr-line-strong: #3789b5;
-  --cr-brand-400: #1f9ed6;
-  --cr-slider-track-0: #0a6d96;
-  --cr-slider-track-1: #b5d2e0;
+  --cr-line-2: var(--cr-ch-theater-line-2, #2a6d95);
+  --cr-line-3: var(--cr-ch-theater-line-3, #2f7ba6);
+  --cr-line-strong: var(--cr-ch-theater-line-strong, #3789b5);
+  --cr-brand-400: var(--cr-ch-theater-brand-400, #1f9ed6);
+  --cr-slider-track-0: var(--cr-ch-theater-slider-track-0, #0a6d96);
+  --cr-slider-track-1: var(--cr-ch-theater-slider-track-1, #b5d2e0);
 }
 
 /* Ads are images, so the token remap does not reach them. This is the one place
@@ -2913,11 +3076,18 @@ onBeforeUnmount(() => {
 /* Theater is layout-only for anyone who has asked for maximum contrast or reduced
    transparency. The widened picture is free; only the recolouring is dropped.
 
-   The values below are the :root values from theme.css restated, not `initial` —
-   `initial` on a custom property means the guaranteed-invalid value, so every
-   var() referencing it would fail rather than fall back to the theme. If a browser
-   does not understand these media features the block simply never applies, which
-   is the safe direction: the dim it would have undone is itself AA-conformant. */
+   The values below are the :root values restated, not `initial` — `initial` on a
+   custom property means the guaranteed-invalid value, so every var() referencing it
+   would fail rather than fall back to the theme. If a browser does not understand
+   these media features the block simply never applies, which is the safe direction:
+   the dim it would have undone is itself AA-conformant.
+
+   They restate the CHANNEL palette (`var(--cr-ch-x, <shipped literal>)`), not the
+   shipped blue, so that cancelling the dim restores whatever :root currently holds.
+   Restating the blue literals here would be wrong for a viewer who has asked only for
+   reduced transparency: theme.css resets :root to the audited blue for forced-colors
+   and prefers-contrast, but deliberately not for that one, so this block would have
+   painted blue chrome onto an otherwise recoloured page. */
 @media (forced-colors: active),
   (prefers-contrast: more),
   (prefers-contrast: custom),
@@ -2925,31 +3095,31 @@ onBeforeUnmount(() => {
   .page.theater .title-bar:not(:hover):not(:has(:focus-visible)),
   .page.theater .announcement:not(:hover):not(:has(:focus-visible)),
   .page.theater .controls:not(:hover):not(:has(:focus-visible)) {
-    --cr-surface-3: #151c25;
-    --cr-surface-4: #18212b;
-    --cr-surface-panel-bot: #142739;
-    --cr-surface-titlebar-mid: #1c2d3e;
-    --cr-surface-titlebar-end: #0d324c;
-    --cr-surface-btn-top: #0e334d;
-    --cr-surface-btn-bot: #0c2336;
+    --cr-surface-3: var(--cr-ch-surface-3, #151c25);
+    --cr-surface-4: var(--cr-ch-surface-4, #18212b);
+    --cr-surface-panel-bot: var(--cr-ch-surface-panel-bot, #142739);
+    --cr-surface-titlebar-mid: var(--cr-ch-surface-titlebar-mid, #1c2d3e);
+    --cr-surface-titlebar-end: var(--cr-ch-surface-titlebar-end, #0d324c);
+    --cr-surface-btn-top: var(--cr-ch-surface-btn-top, #0e334d);
+    --cr-surface-btn-bot: var(--cr-ch-surface-btn-bot, #0c2336);
 
-    --cr-text: #e4f1f9;
-    --cr-text-bright: #e2f5fe;
-    --cr-text-ctrl: #c0e7fa;
-    --cr-text-lcd: #bce3f6;
-    --cr-text-muted-2: #a3cbe0;
-    --cr-text-muted-4: #89bdd6;
-    --cr-text-muted-5: #80bbd6;
-    --cr-text-dim-1: #77b0cc;
-    --cr-text-dim-2: #75afca;
-    --cr-accent: #9fe0ff;
+    --cr-text: var(--cr-ch-text, #e4f1f9);
+    --cr-text-bright: var(--cr-ch-text-bright, #e2f5fe);
+    --cr-text-ctrl: var(--cr-ch-text-ctrl, #c0e7fa);
+    --cr-text-lcd: var(--cr-ch-text-lcd, #bce3f6);
+    --cr-text-muted-2: var(--cr-ch-text-muted-2, #a3cbe0);
+    --cr-text-muted-4: var(--cr-ch-text-muted-4, #89bdd6);
+    --cr-text-muted-5: var(--cr-ch-text-muted-5, #80bbd6);
+    --cr-text-dim-1: var(--cr-ch-text-dim-1, #77b0cc);
+    --cr-text-dim-2: var(--cr-ch-text-dim-2, #75afca);
+    --cr-accent: var(--cr-ch-accent, #9fe0ff);
 
-    --cr-line-2: #25709e;
-    --cr-line-3: #4096c6;
-    --cr-line-strong: #359acc;
-    --cr-brand-400: #0ba0df;
-    --cr-slider-track-0: #016794;
-    --cr-slider-track-1: #cbe9ff;
+    --cr-line-2: var(--cr-ch-line-2, #25709e);
+    --cr-line-3: var(--cr-ch-line-3, #4096c6);
+    --cr-line-strong: var(--cr-ch-line-strong, #359acc);
+    --cr-brand-400: var(--cr-ch-brand-400, #0ba0df);
+    --cr-slider-track-0: var(--cr-ch-slider-track-0, #016794);
+    --cr-slider-track-1: var(--cr-ch-slider-track-1, #cbe9ff);
   }
 
   .page.theater .ad-slot .ad-banner {
