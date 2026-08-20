@@ -456,7 +456,7 @@
           </div>
 
           <!-- The whole image at contain, with everything outside the platform's safe
-               area dimmed. The ad-banner preview uses contain to judge the whole image;
+               area dimmed. The promo-banner preview uses contain to judge the whole image;
                here the question is the opposite one, what gets cut off. -->
           <div class="embed-preview" :class="{ light: embedPreviewLight }">
             <img :src="bannerForm.embed.imageUrl" :alt="bannerForm.embed.alt || 'Embed preview'" />

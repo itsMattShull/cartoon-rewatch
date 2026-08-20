@@ -84,23 +84,23 @@
       </section>
 
       <aside class="controls">
-        <!-- On phones .controls sits below the TV, so the ad stack is ordered after
-             the panel to keep the remote controls reachable without scrolling past ads. -->
-        <div v-if="visibleAds.length" class="ad-stack">
+        <!-- On phones .controls sits below the TV, so the promo stack is ordered after
+             the panel to keep the remote controls reachable without scrolling past promos. -->
+        <div v-if="visiblePromos.length" class="promo-stack">
           <component
-            :is="ad.href ? 'a' : 'div'"
-            v-for="(ad, index) in visibleAds"
-            :key="ad.id"
-            class="ad-slot"
-            v-bind="ad.href ? { href: ad.href, target: '_blank', rel: 'noopener noreferrer' } : {}"
+            :is="promo.href ? 'a' : 'div'"
+            v-for="(promo, index) in visiblePromos"
+            :key="promo.id"
+            class="promo-slot"
+            v-bind="promo.href ? { href: promo.href, target: '_blank', rel: 'noopener noreferrer' } : {}"
           >
             <img
-              class="ad-banner"
-              :src="ad.src"
-              :alt="ad.alt"
-              :width="ad.width || null"
-              :height="ad.height || null"
-              :style="ad.width && ad.height ? { aspectRatio: `${ad.width} / ${ad.height}` } : null"
+              class="promo-banner"
+              :src="promo.src"
+              :alt="promo.alt"
+              :width="promo.width || null"
+              :height="promo.height || null"
+              :style="promo.width && promo.height ? { aspectRatio: `${promo.width} / ${promo.height}` } : null"
               :loading="index === 0 ? 'eager' : 'lazy'"
               decoding="async"
               fetchpriority="low"
@@ -619,7 +619,7 @@ const showChannelStrip = computed(
   () => Boolean(channelStrip.value?.enabled && channelStrip.value?.text)
 )
 
-const visibleAds = computed(() =>
+const visiblePromos = computed(() =>
   (banners.value?.ads ?? [])
     .filter((ad) => ad?.enabled)
     .map((ad) => ({
@@ -630,7 +630,7 @@ const visibleAds = computed(() =>
       width: ad.width || 0,
       height: ad.height || 0
     }))
-    .filter((ad) => ad.src)
+    .filter((promo) => promo.src)
 )
 
 function dismissAnnouncement() {
@@ -2363,20 +2363,20 @@ onBeforeUnmount(() => {
     justify-self: stretch;
   }
 
-  .page.theater .ad-stack {
+  .page.theater .promo-stack {
     max-width: var(--controls-max);
   }
 
-  /* .ad-stack is v-if'd away when no ads are enabled, which would drop the panel into
+  /* .promo-stack is v-if'd away when no ads are enabled, which would drop the panel into
      the narrow ad column and waste the whole wide one — the guide would come out no
      bigger than it is with the sidebar attached. Collapse to one column and hold the
      panel to the width it would have had beside the ads, so it measures the same
      either way. */
-  .page.theater .controls:not(:has(> .ad-stack)) {
+  .page.theater .controls:not(:has(> .promo-stack)) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .page.theater .controls:not(:has(> .ad-stack)) .panel {
+  .page.theater .controls:not(:has(> .promo-stack)) .panel {
     max-width: calc(100% - var(--controls-max) - 24px);
     margin-inline: auto;
   }
@@ -2450,19 +2450,19 @@ onBeforeUnmount(() => {
   justify-self: end;
 }
 
-.ad-stack {
+.promo-stack {
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
 }
 
-.ad-slot {
+.promo-slot {
   display: block;
   min-width: 0;
 }
 
-.ad-banner {
+.promo-banner {
   width: 100%;
   height: auto;
   display: block;
@@ -3069,7 +3069,7 @@ onBeforeUnmount(() => {
 /* Ads are images, so the token remap does not reach them. This is the one place
    a real opacity is used, kept mild and lifted on hover: the banners have to stay
    legible and clickable, since dimming them is not meant to cost impressions. */
-.page.theater .ad-slot:not(:hover):not(:has(:focus-visible)) .ad-banner {
+.page.theater .promo-slot:not(:hover):not(:has(:focus-visible)) .promo-banner {
   opacity: 0.8;
 }
 
@@ -3122,7 +3122,7 @@ onBeforeUnmount(() => {
     --cr-slider-track-1: var(--cr-ch-slider-track-1, #cbe9ff);
   }
 
-  .page.theater .ad-slot .ad-banner {
+  .page.theater .promo-slot .promo-banner {
     opacity: 1;
   }
 }
@@ -3136,13 +3136,13 @@ onBeforeUnmount(() => {
     order: 1;
   }
 
-  .ad-stack {
+  .promo-stack {
     order: 2;
   }
 
   /* Cap the stack on phones: an unbounded column of banners otherwise pushes
      the controls far below the fold. */
-  .ad-stack > .ad-slot:nth-child(n + 3) {
+  .promo-stack > .promo-slot:nth-child(n + 3) {
     display: none;
   }
 
