@@ -71,7 +71,7 @@ const DEFAULTS = {
     {
       id: 'default-ad',
       label: 'Cartoon ReOrbit',
-      imageUrl: '/ad1.gif',
+      imageUrl: '/promo1.gif',
       linkUrl: 'https://www.cartoonreorbit.com',
       alt: 'Cartoon ReOrbit',
       width: 728,
